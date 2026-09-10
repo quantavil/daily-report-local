@@ -1,0 +1,128 @@
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from config import require_openrouter_key
+from extractor import _build_prompt, extract_with_ai, get_strict_json_schema
+
+
+def test_require_openrouter_key_raises_when_missing(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "")
+    with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY is missing or empty"):
+        require_openrouter_key()
+
+
+def test_require_openrouter_key_returns_when_present(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-test-key")
+    assert require_openrouter_key() == "sk-or-v1-test-key"
+
+
+def test_strict_json_schema_structure():
+    schema = get_strict_json_schema()
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    assert "properties" in schema
+    assert "required" in schema
+    # Every property MUST be present in required for strict JSON schema mode
+    assert set(schema["required"]) == set(schema["properties"].keys())
+    assert "shipper_name" in schema["required"]
+    assert "invoice_numbers" in schema["required"]
+    assert "leo_date" in schema["required"]
+    assert "container_numbers" in schema["required"]
+
+
+def test_build_prompt_doc_types():
+    p_gate = _build_prompt("EGATEPASS")
+    assert "Customs Gatepass (SB35)" in p_gate
+    assert "4.CHA" in p_gate
+    assert "Allowed for Movement" in p_gate
+
+    p_leo = _build_prompt("FINAL_LEO")
+    assert "Final LEO Shipping Bill (SB22)" in p_leo
+    assert "6.LEO Date" in p_leo
+    assert "2.INV NO." in p_leo
+
+    p_first = _build_prompt("FIRST_COPY")
+    assert "First Copy Shipping Bill (SB21)" in p_first
+    assert "not granted yet on First Copy" in p_first
+
+
+def test_extract_with_ai_mock_success(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-mock-key")
+
+    mock_resp = MagicMock()
+    mock_resp.choices = [
+        MagicMock(
+            message=MagicMock(
+                content='{"shipper_name": "ACME EXPORTS", "invoice_numbers": "INV/001", "leo_date": "10-Sep-2026", "container_numbers": "TCKU1234567", "container_sizes": "40", "customs_seal_numbers": "012345"}'
+            )
+        )
+    ]
+
+    with patch("extractor.OpenAI") as mock_openai_cls:
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_resp
+        mock_openai_cls.return_value = mock_client
+
+        # EGATEPASS should zero out invoice_numbers
+        res_gate = extract_with_ai("dummy text", "EGATEPASS", sb_no="1234567")
+        assert res_gate.shipper_name == "ACME EXPORTS"
+        assert res_gate.invoice_numbers is None
+        assert res_gate.leo_date == "10-Sep-2026"
+        assert res_gate.container_numbers == "TCKU1234567"
+
+        # FIRST_COPY should zero out LEO and container info
+        res_first = extract_with_ai("dummy text", "FIRST_COPY", sb_no="1234567")
+        assert res_first.shipper_name == "ACME EXPORTS"
+        assert res_first.invoice_numbers == "INV/001"
+        assert res_first.leo_date is None
+        assert res_first.container_numbers is None
+
+
+def test_extract_with_ai_handles_markdown_wrapped_json(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-mock-key")
+
+    mock_resp = MagicMock()
+    mock_resp.choices = [
+        MagicMock(
+            message=MagicMock(
+                content='```json\n{"shipper_name": "FENCED EXPORTS", "invoice_numbers": "INV/999", "leo_date": null, "container_numbers": null, "container_sizes": null, "customs_seal_numbers": null}\n```'
+            )
+        )
+    ]
+
+    with patch("extractor.OpenAI") as mock_openai_cls:
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_resp
+        mock_openai_cls.return_value = mock_client
+
+        res = extract_with_ai("dummy text", "FIRST_COPY", sb_no="1234567")
+        assert res.shipper_name == "FENCED EXPORTS"
+        assert res.invoice_numbers == "INV/999"
+
+
+def test_extract_with_ai_retries_transient_error(monkeypatch):
+    from openai import RateLimitError
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-mock-key")
+
+    mock_resp = MagicMock()
+    mock_resp.choices = [
+        MagicMock(
+            message=MagicMock(
+                content='{"shipper_name": "RETRY EXPORTS", "invoice_numbers": "INV/777", "leo_date": null, "container_numbers": null, "container_sizes": null, "customs_seal_numbers": null}'
+            )
+        )
+    ]
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.side_effect = [
+        RateLimitError(message="rate limited", response=MagicMock(status_code=429), body=None),
+        mock_resp,
+    ]
+
+    with patch("extractor.get_openai_client", return_value=mock_client), patch("time.sleep"):
+        res = extract_with_ai("dummy text", "FIRST_COPY", sb_no="1234567")
+        assert res.shipper_name == "RETRY EXPORTS"
+        assert mock_client.chat.completions.create.call_count == 2
+

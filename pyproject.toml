@@ -1,0 +1,75 @@
+[project]
+name = "daily-report-sync"
+version = "0.1.0"
+description = "Add your description here"
+authors = [
+    { name = "quantavil", email = "quantavil@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "google-api-python-client>=2.200.0",
+    "google-auth-httplib2>=0.4.2",
+    "google-auth-oauthlib>=1.4.1",
+    "openai>=3.11.0",
+    "openpyxl>=3.1.5",
+    "pydantic>=2.0",
+    "pymupdf>=1.28.2",
+    "python-dotenv>=1.2.3",
+    "rich>=15.0.0",
+    "typer>=0.12.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
+    "ruff>=0.4.0",
+]
+
+[project.scripts]
+daily-report-sync = "sync:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+py-modules = [
+    "config",
+    "excel_manager",
+    "extractor",
+    "gmail_client",
+    "models",
+    "pdf_processor",
+    "sync",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+pythonpath = ["src"]
+addopts = "-v --tb=short --cov=src --cov-report=term-missing"
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["tests/test_*.py"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "W",
+    "F",
+    "I",
+    "UP",
+    "B",
+    "C4",
+    "RUF",
+]
+ignore = [
+    "E501",
+]

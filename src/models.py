@@ -1,0 +1,96 @@
+import re
+from datetime import date
+
+from pydantic import BaseModel, Field, field_validator
+
+
+class CustomsExtractedFields(BaseModel):
+    """Structured customs data model for Pydantic v2 validation and OpenRouter output."""
+    shipper_name: str | None = Field(
+        default=None,
+        description="Exporter / Shipper company or entity name strictly without address details."
+    )
+    invoice_numbers: str | None = Field(
+        default=None,
+        description="Invoice number(s) from Section H / INVOICE DETAILS."
+    )
+    leo_date: str | None = Field(
+        default=None,
+        description="LEO Date or Gatepass Order Date formatted as DD-Mon-YYYY (e.g. 28-Apr-2025)."
+    )
+    container_numbers: str | None = Field(
+        default=None,
+        description="ISO container numbers (e.g. UNSU0088111, TCKU7809338)."
+    )
+    container_sizes: str | None = Field(
+        default=None,
+        description="Container sizes (standard 20, 40, or 45)."
+    )
+    customs_seal_numbers: str | None = Field(
+        default=None,
+        description="Customs seal numbers."
+    )
+
+    @field_validator("invoice_numbers", mode="before")
+    @classmethod
+    def clean_invoices(cls, v):
+        if not v:
+            return None
+        if isinstance(v, list):
+            items = [str(x).strip() for x in v if str(x).strip()]
+            return items[0] if items else None
+        s = str(v).strip()
+        tokens = [t.strip() for t in re.split(r"[\n,]+", s) if t.strip()]
+        return tokens[0] if tokens else None
+
+    @field_validator("customs_seal_numbers", mode="before")
+    @classmethod
+    def clean_seals(cls, v):
+        if not v:
+            return None
+        if isinstance(v, list):
+            return "\n".join(str(x).strip() for x in v if x)
+        return str(v).strip() or None
+
+    @field_validator("container_sizes", mode="before")
+    @classmethod
+    def clean_container_sizes(cls, v):
+        if not v:
+            return None
+        if isinstance(v, list):
+            v = "\n".join(str(x) for x in v)
+        # Extract only standard sizes 20, 40, 45
+        tokens = re.findall(r"\b(20|40|45)\b", str(v))
+        if tokens:
+            return "\n".join(dict.fromkeys(tokens))
+        return None
+
+    @field_validator("container_numbers", mode="before")
+    @classmethod
+    def clean_containers(cls, v):
+        if not v:
+            return None
+        if isinstance(v, list):
+            v = "\n".join(str(x) for x in v)
+        tokens = re.findall(r"\b[A-Z]{3}[UJZ]\d{7}\b", str(v).upper())
+        if tokens:
+            return "\n".join(dict.fromkeys(tokens))
+        return str(v).strip() or None
+
+
+class ExcelRow(BaseModel):
+    """Represents a Shipping Bill row in the Excel Daily Working Report."""
+    row_idx: int
+    sb_no: str
+    sb_date: date | None = None
+    inv_no: str | None = None
+    leo_date: str | None = None
+    shipper_name: str | None = None
+    container_no: str | None = None
+    container_size: str | None = None
+    customs_seal: str | None = None
+    missing_fields: list[str] = Field(default_factory=list)
+
+    @property
+    def is_complete(self) -> bool:
+        return len(self.missing_fields) == 0

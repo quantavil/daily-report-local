@@ -1,0 +1,31 @@
+# Secrets & Local Credentials (NEVER COMMIT)
+.env
+credentials.json
+token.json
+
+# Excel Workbooks & Backups
+*.xlsx
+*.bak*
+.~lock.*#
+
+# Python / Virtual Environment
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Testing & Linting
+.coverage
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+
+# OS / Editor
+.DS_Store
+*.swp
+*.swo
+.vscode/
+.idea/
