@@ -2,6 +2,7 @@
 .env
 credentials.json
 token.json
+.cache/
 
 # Excel Workbooks & Backups
 *.xlsx
@@ -9,7 +10,7 @@ token.json
 .~lock.*#
 
 # Python / Virtual Environment
-.venv/
+.venv
 __pycache__/
 *.py[cod]
 *$py.class

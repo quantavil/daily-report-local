@@ -43,6 +43,7 @@ py-modules = [
     "gmail_client",
     "leo_validation",
     "models",
+    "pipeline_cache",
     "pdf_processor",
     "sync",
 ]

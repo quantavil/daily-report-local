@@ -8,6 +8,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 DEFAULT_EXCEL_PATH = BASE_DIR / "Daily Working Report.xlsx"
 EXCEL_PATH = Path(os.getenv("EXCEL_PATH", str(DEFAULT_EXCEL_PATH)))
+CACHE_DIR = Path(os.getenv("DAILY_REPORT_CACHE_DIR") or (BASE_DIR / ".cache" / "daily-report")).expanduser()
 
 # OpenRouter Settings
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
