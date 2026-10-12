@@ -36,6 +36,8 @@ uv run --no-sync ruff check src/ tests/ sync.py          # lint (must be 100% cl
 - **AnyDoc**: Primary conversion is native Markdown, per retained page with original source page markers. OCR is off (`ocr="reject"`); raise a clear conversion error for pages requiring OCR. No hosted requests or raw-text fallback.
 - **PyMuPDF**: Always keep raw block order; `page.get_text(sort=True)` regresses extraction. Documents must be closed in `finally:` blocks.
 - **Pruning**: `trim_pdf` removes item lists and drawback claims, returning `tuple[str, list[int]]` (AnyDoc Markdown with source markers and zero-based kept page indices).
+- **Selective Sources**: SB22 supersedes SB21. Download SB21 only for missing/unusable invoice/exporter information. LEO-only uses Gatepass/SB22 page one and requests only evidence.
+- **Cache**: `.cache/daily-report` (or `DAILY_REPORT_CACHE_DIR`) stores private PDF/text/raw AI artifacts. Revalidate cached LEO evidence against current sources; never trust cached derived dates. Metadata discovery stays fresh. `--refresh` bypasses AI cache; `--no-cache` disables caching; audits always use fresh AI.
 - **Identity Guard**: `process_documents` verifies the 7-digit SB number is present in PDF text before extraction.
 - **Repair Scope**: `--force` includes complete rows; `--leo-only` restricts data writes to LEO. Status writes obey row/SB filters. Reject unknown sheet names. Never erase an existing date when evidence is missing or rejected.
-- **Secrets**: `.env`, `credentials.json`, `token.json`, and `*.xlsx` are strictly git-ignored. Never commit them.
+- **Secrets**: Private caches, `.env`, `credentials.json`, `token.json`, and `*.xlsx` are strictly git-ignored. Never commit them.
