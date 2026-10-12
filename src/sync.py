@@ -480,7 +480,8 @@ def cmd_sync(
                 }
 
                 for completed_idx, future in enumerate(as_completed(future_to_row), start=1):
-                    row_item = future_to_row[future]
+                    # Drop completed Futures so their PDF payloads can be freed.
+                    row_item = future_to_row.pop(future)
                     try:
                         row_idx, sb_no, missing_fields, docs, extracted, error_str = future.result()
                         if error_str:

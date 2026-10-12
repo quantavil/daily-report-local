@@ -164,3 +164,35 @@ def test_skipping_filled_cells_does_not_clear_a_previous_rejection(tmp_path, mon
     cmd_sync(manager, "FY 2026-27", gmail, leo_only=True, workers=1)
     assert gmail.fetched == []
     assert manager.wb.active.cell(2, 9).value == "Partial"
+
+
+def test_completed_pdf_payloads_are_released_before_checkpoint(tmp_path, monkeypatch):
+    """A long repair must not retain every processed PDF through its Futures."""
+    import gc
+    import weakref
+
+    class Documents(dict):
+        pass
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "fake-unit-test-key")
+    manager = workbook(tmp_path, [ORIGINAL.copy() for _ in range(25)])
+    payloads = []
+
+    def worker(row, sb, missing, gmail):
+        docs = Documents(finalLeo=("sb22.pdf", b"pdf-payload"))
+        payloads.append(weakref.ref(docs))
+        return row, sb, missing, docs, extracted(), None
+
+    original_save = manager.save
+    released_at_checkpoint = []
+
+    def save():
+        if not released_at_checkpoint:
+            gc.collect()
+            released_at_checkpoint.append(sum(ref() is None for ref in payloads))
+        original_save()
+
+    monkeypatch.setattr("sync._fetch_and_extract_worker", worker)
+    monkeypatch.setattr(manager, "save", save)
+    cmd_sync(manager, "FY 2026-27", Gmail(), force=True, leo_only=True, workers=1)
+    assert released_at_checkpoint[0] >= 18
