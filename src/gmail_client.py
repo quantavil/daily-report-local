@@ -35,7 +35,7 @@ class GmailClient:
     @property
     def service(self):
         if not hasattr(self._local, "service") or self._local.service is None:
-            if self._creds is None:
+            if self._creds is None or not self._creds.valid:
                 if not self.authenticate():
                     return None
             else:
@@ -92,14 +92,18 @@ class GmailClient:
         Searches Gmail for ICEGATE PDF attachments matching a given Shipping Bill number.
         Returns: { 'eGatepass': (filename, bytes), 'finalLeo': (filename, bytes), 'firstCopy': (filename, bytes) }
         """
-        if not self.service:
+        service = self.service
+        if not service:
             if not self.authenticate():
                 return {}
+            service = self.service
+        if not service:
+            return {}
 
         phrases_or = " OR ".join(f'"{p}"' for p in SUBJECT_PHRASES)
         query = f'"{sb_no}" ({phrases_or})'
 
-        results = self.service.users().messages().list(userId="me", q=query, maxResults=GMAIL_MAX_THREADS).execute()
+        results = service.users().messages().list(userId="me", q=query, maxResults=GMAIL_MAX_THREADS).execute()
         messages = results.get("messages", [])
         if not messages:
             return {}
@@ -107,7 +111,7 @@ class GmailClient:
         documents: dict[str, tuple[str, bytes]] = {}
 
         for msg_summary in messages:
-            msg = self.service.users().messages().get(userId="me", id=msg_summary["id"]).execute()
+            msg = service.users().messages().get(userId="me", id=msg_summary["id"]).execute()
             payload = msg.get("payload", {})
             headers = {h["name"].lower(): h["value"] for h in payload.get("headers", [])}
             subject = headers.get("subject", "")
@@ -133,10 +137,15 @@ class GmailClient:
 
                 slot = classify_document(filename, subject)
                 if slot != "UNKNOWN" and slot not in documents:
-                    att_data = self.service.users().messages().attachments().get(
+                    att_data = service.users().messages().attachments().get(
                         userId="me", messageId=msg_summary["id"], id=attachment_id
                     ).execute()
-                    raw_bytes = base64.urlsafe_b64decode(att_data.get("data", ""))
+                    raw_data = att_data.get("data", "")
+                    if raw_data:
+                        padded_data = raw_data + "=" * (-len(raw_data) % 4)
+                        raw_bytes = base64.urlsafe_b64decode(padded_data)
+                    else:
+                        raw_bytes = b""
                     documents[slot] = (filename, raw_bytes)
 
                 if len(documents) == 3:

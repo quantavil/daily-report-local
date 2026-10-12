@@ -31,6 +31,27 @@ class CustomsExtractedFields(BaseModel):
         description="Customs seal numbers."
     )
 
+    @field_validator("*", mode="before")
+    @classmethod
+    def clean_placeholders(cls, v):
+        if v is None:
+            return None
+        if isinstance(v, str) and v.strip().upper() in ("", "-", "--", "NA", "N/A", "NONE", "NULL", "NIL", "NOT APPLICABLE"):
+            return None
+        return v
+
+    @field_validator("shipper_name", mode="before")
+    @classmethod
+    def clean_shipper(cls, v):
+        if not v:
+            return None
+        s = str(v).strip()
+        for _ in range(3):
+            s = re.sub(r"^[\s,–—\-]+|[\s,–—\-]+$", "", s)  # noqa: RUF001
+            s = s.strip("\"'")
+        s = re.sub(r"\s+", " ", s).strip()
+        return s or None
+
     @field_validator("invoice_numbers", mode="before")
     @classmethod
     def clean_invoices(cls, v):
@@ -38,10 +59,15 @@ class CustomsExtractedFields(BaseModel):
             return None
         if isinstance(v, list):
             items = [str(x).strip() for x in v if str(x).strip()]
-            return items[0] if items else None
-        s = str(v).strip()
-        tokens = [t.strip() for t in re.split(r"[\n,]+", s) if t.strip()]
-        return tokens[0] if tokens else None
+            val = items[0] if items else ""
+        else:
+            s = str(v).strip()
+            tokens = [t.strip() for t in re.split(r"[\n,]+", s) if t.strip()]
+            val = tokens[0] if tokens else ""
+        if not val:
+            return None
+        cleaned = re.split(r"\s+(?:DT\.?|DATED|DATE|AMT\.?|AMOUNT|INR|USD)\b", val, flags=re.IGNORECASE)[0].strip().strip("\"'")
+        return cleaned or None
 
     @field_validator("customs_seal_numbers", mode="before")
     @classmethod
@@ -49,8 +75,18 @@ class CustomsExtractedFields(BaseModel):
         if not v:
             return None
         if isinstance(v, list):
-            return "\n".join(str(x).strip() for x in v if x)
-        return str(v).strip() or None
+            items = [str(x).strip() for x in v if x]
+        else:
+            items = [str(x).strip() for x in re.split(r"[\n,]+", str(v)) if str(x).strip()]
+        valid_items = []
+        for item in items:
+            cleaned = re.sub(r"^(?:SEAL\s*NO\.?|CUSTOMS\s*SEAL(?:\s*NO\.?)?)\s*[:#-]\s*", "", item, flags=re.IGNORECASE).strip()
+            if cleaned.upper() in ("", "-", "--", "PKG", "PACKAGE", "PACKAGES", "SEAL", "SEALS", "NA", "N/A", "NONE", "NULL"):
+                continue
+            valid_items.append(cleaned)
+        if valid_items:
+            return "\n".join(dict.fromkeys(valid_items))
+        return None
 
     @field_validator("container_sizes", mode="before")
     @classmethod
@@ -59,8 +95,8 @@ class CustomsExtractedFields(BaseModel):
             return None
         if isinstance(v, list):
             v = "\n".join(str(x) for x in v)
-        # Extract only standard sizes 20, 40, 45
-        tokens = re.findall(r"\b(20|40|45)\b", str(v))
+        # Extract only standard sizes 20, 40, 45 (allowing FT, feet, quote annotations)
+        tokens = re.findall(r"\b(20|40|45)(?:\s*(?:FT|FEET|'|\"))?(?!\d)", str(v).upper())
         if tokens:
             return "\n".join(dict.fromkeys(tokens))
         return None
@@ -72,8 +108,9 @@ class CustomsExtractedFields(BaseModel):
             return None
         if isinstance(v, list):
             v = "\n".join(str(x) for x in v)
-        tokens = re.findall(r"\b[A-Z]{3}[UJZ]\d{7}\b", str(v).upper())
-        if tokens:
+        matches = re.findall(r"\b([A-Z]{3}[UJZ])[\s-]?(\d{7})\b", str(v).upper())
+        if matches:
+            tokens = [f"{prefix}{num}" for prefix, num in matches]
             return "\n".join(dict.fromkeys(tokens))
         return str(v).strip() or None
 

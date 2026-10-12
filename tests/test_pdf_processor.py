@@ -60,3 +60,16 @@ def test_verify_identity():
     assert verify_identity("SBNO: 1278254", "1278254") is True
     assert verify_identity("Some other doc 9999999", "1278254") is False
     assert verify_identity("Any text when sb is empty", "") is True
+
+
+def test_classify_document_filename_variants():
+    assert classify_document("1278254_SB_21.pdf") == "firstCopy"
+    assert classify_document("1278254_SB-22.pdf") == "finalLeo"
+    assert classify_document("1278254_SB 35.pdf") == "eGatepass"
+    assert classify_document("1278254_SB35.pdf") == "eGatepass"
+
+
+def test_trim_pdf_corrupt_stream():
+    text, kept = trim_pdf(b"corrupted non-pdf data", "EGATEPASS")
+    assert text == ""
+    assert kept == []

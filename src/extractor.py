@@ -1,5 +1,6 @@
 import logging
 import re
+import threading
 import time
 from typing import Any
 
@@ -18,6 +19,7 @@ from models import CustomsExtractedFields
 logger = logging.getLogger(__name__)
 
 _client_instance: OpenAI | None = None
+_client_lock = threading.Lock()
 
 
 def get_openai_client() -> OpenAI:
@@ -25,15 +27,35 @@ def get_openai_client() -> OpenAI:
     global _client_instance
     api_key = require_openrouter_key()
     if _client_instance is None or _client_instance.api_key != api_key:
-        _client_instance = OpenAI(
-            base_url=OPENROUTER_BASE_URL,
-            api_key=api_key,
-            default_headers={
-                "HTTP-Referer": "https://github.com/daily-report-local",
-                "X-Title": "Daily Report Local Sync",
-            },
-        )
+        with _client_lock:
+            if _client_instance is None or _client_instance.api_key != api_key:
+                _client_instance = OpenAI(
+                    base_url=OPENROUTER_BASE_URL,
+                    api_key=api_key,
+                    default_headers={
+                        "HTTP-Referer": "https://github.com/daily-report-local",
+                        "X-Title": "Daily Report Local Sync",
+                    },
+                )
     return _client_instance
+
+
+def _clean_json_payload(raw: str) -> str:
+    """Robustly extracts valid JSON substring from markdown fences, think blocks, or conversational wrapper."""
+    cleaned = raw.strip()
+    if not cleaned:
+        return "{}"
+    # Strip <think>...</think> reasoning blocks if present
+    cleaned = re.sub(r"<think>[\s\S]*?</think>", "", cleaned).strip()
+    # Find markdown JSON fences
+    fence_match = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", cleaned, re.IGNORECASE)
+    if fence_match:
+        return fence_match.group(1).strip()
+    # Find outermost curly braces
+    obj_match = re.search(r"(\{[\s\S]*\})", cleaned)
+    if obj_match:
+        return obj_match.group(1).strip()
+    return re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned).strip() or "{}"
 
 
 UNIFIED_PROMPT = (
@@ -43,7 +65,7 @@ UNIFIED_PROMPT = (
     "Field Guidelines:\n"
     "- 'shipper_name': TRUE exporter entity name ONLY (found after discharge-port line like 'XXXX (Port Name)' in SB21/SB22, or after/under '4.CHA' in Gatepass). NEVER the CHA company name (e.g. VISHAL LOGISTICS) or '3.Exporter' block. Exclude addresses, roads, PIN, city.\n"
     "- 'invoice_numbers': Primary invoice number from '2.INV NO.' in SB21/SB22 (e.g. NF/156/2025-26, 132/2026, 3878). If multiple invoices, take the first/primary invoice only. Exclude dates, amounts, currency.\n"
-    "- 'leo_date': Gatepass Order Date or LEO Date formatted as DD-Mon-YYYY (from '1.Order No / date' in Gatepass, or '6.LEO Date' in SB22).\n"
+    "- 'leo_date': Gatepass Order Date or LEO Date formatted as DD-Mon-YYYY (from '1.Order No / date' in Gatepass, or '6.LEO Date' in SB22). CRITICAL: If ONLY First Copy (SB21) is available, LEO has NOT yet been granted — you MUST set leo_date to null. NEVER use dates under J.PROCESS DETAILS or Submission/Assessment in SB21.\n"
     "- 'container_numbers': Container number(s) from the 'Allowed for Movement' table in Gatepass (e.g. UNSU0088111). Join multiple with newline.\n"
     "- 'container_sizes': ISO container size(s) (20, 40, or 45) from Gatepass 'Allowed for Movement' table. Join multiple with newline.\n"
     "- 'customs_seal_numbers': Customs seal number(s) from Gatepass 'Allowed for Movement' table. Join multiple with newline. NEVER 'Pkg' or label words."
@@ -145,7 +167,7 @@ def extract_with_ai(
             logger.warning(f"OpenRouter transient error ({e}), retrying in {sleep_s}s (attempt {attempt + 1}/{max_retries})...")
             time.sleep(sleep_s)
         except APIStatusError as e:
-            if e.status_code in (429, 500, 502, 503, 504) and attempt < max_retries - 1:
+            if (e.status_code in (408, 429) or e.status_code >= 500) and attempt < max_retries - 1:
                 sleep_s = 2 ** attempt
                 logger.warning(f"OpenRouter HTTP {e.status_code} error, retrying in {sleep_s}s (attempt {attempt + 1}/{max_retries})...")
                 time.sleep(sleep_s)
@@ -156,11 +178,15 @@ def extract_with_ai(
             logger.error(f"OpenRouter unexpected error for SB {sb_no} ({doc_type}): {e}")
             raise RuntimeError(f"OpenRouter AI extraction failed for SB {sb_no} ({doc_type}): {e}") from e
 
-    raw = response.choices[0].message.content or "{}" if response else "{}"
+    raw = (
+        response.choices[0].message.content or "{}"
+        if (response and response.choices and response.choices[0].message)
+        else "{}"
+    )
     try:
         parsed = CustomsExtractedFields.model_validate_json(raw)
     except ValidationError:
-        cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip())
+        cleaned = _clean_json_payload(raw)
         parsed = CustomsExtractedFields.model_validate_json(cleaned)
 
     # Enforce document-type invariants

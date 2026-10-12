@@ -17,7 +17,7 @@ def is_empty_cell(val: Any) -> bool:
     if val is None:
         return True
     s = str(val).strip().upper()
-    return s in ("", "-", "NA", "N/A", "NONE")
+    return s in ("", "-", "--", "NA", "N/A", "NONE", "NULL", "NIL", "NOT APPLICABLE")
 
 
 def build_merged_cell_map(ws: Worksheet) -> dict[tuple[int, int], tuple[int, int]]:
@@ -58,7 +58,7 @@ def coerce_excel_date(val: Any) -> Any:
     if val is None or isinstance(val, (date, datetime)):
         return val
     s = str(val).strip()
-    m = re.match(r"^(\d{1,2})-([A-Za-z]{3})-(\d{2,4})$", s)
+    m = re.match(r"^(\d{1,2})[-/\.]([A-Za-z]{3})[-/\.](\d{2,4})$", s)
     if m:
         dd, mon, yyyy = m.groups()
         months = {mth.lower(): i + 1 for i, mth in enumerate(
@@ -73,7 +73,7 @@ def coerce_excel_date(val: Any) -> Any:
                 return date(y, mi, int(dd))
             except ValueError:
                 return val
-    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{2,4})$", s)
+    m = re.match(r"^(\d{1,2})[-/\.](\d{1,2})[-/\.](\d{2,4})$", s)
     if m:
         dd, mm, yyyy = m.groups()
         try:
@@ -83,7 +83,7 @@ def coerce_excel_date(val: Any) -> Any:
             return date(y, int(mm), int(dd))
         except ValueError:
             return val
-    m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})$", s)
+    m = re.match(r"^(\d{4})[-/\.](\d{1,2})[-/\.](\d{1,2})$", s)
     if m:
         yyyy, mm, dd = m.groups()
         try:
@@ -179,7 +179,7 @@ class ExcelManager:
             self.load()
         ws = self.wb[sheet_name]
         headers = [
-            str(ws.cell(row=1, column=c).value or "").strip().lower()
+            re.sub(r"\s+", " ", str(ws.cell(row=1, column=c).value or "")).strip().lower()
             for c in range(1, ws.max_column + 1)
         ]
         if "status" in headers:
@@ -234,7 +234,7 @@ class ExcelManager:
             self.load()
         if name in self.wb.sheetnames:
             return False
-        src = self.wb[source]
+        src = self.wb[source] if source in self.wb.sheetnames else self.wb.active
         ws = self.wb.create_sheet(name, 0)
         for c in range(1, src.max_column + 1):
             dst = ws.cell(row=1, column=c)
@@ -254,7 +254,15 @@ class ExcelManager:
         """Writes the sync status for a row (always overwrites, never a formula)."""
         if not self.wb:
             self.load()
-        cell = self.wb[sheet_name].cell(row=row_idx, column=col_idx)
+        ws = self.wb[sheet_name]
+        cell = ws.cell(row=row_idx, column=col_idx)
+        if isinstance(cell, MergedCell):
+            merged_map = build_merged_cell_map(ws)
+            if (row_idx, col_idx) in merged_map:
+                top_r, top_c = merged_map[(row_idx, col_idx)]
+                cell = ws.cell(row=top_r, column=top_c)
+            else:
+                return False
         if str(cell.value or "").startswith("="):
             return False
         cell.value = text
@@ -268,13 +276,17 @@ class ExcelManager:
     def resolve_columns(self, ws: Worksheet) -> dict[str, int]:
         """Maps logical field names to 1-based column indices based on header row."""
         header_row = ws[1]
-        headers = [str(c.value).strip() if c.value is not None else "" for c in header_row]
+        headers = [
+            re.sub(r"\s+", " ", str(c.value or "")).strip().lower()
+            for c in header_row
+        ]
 
         mapping: dict[str, int] = {}
         for key, aliases in EXCEL_COLUMNS.items():
             for alias in aliases:
+                norm_alias = re.sub(r"\s+", " ", alias).strip().lower()
                 for idx, h in enumerate(headers):
-                    if alias.lower() == h.lower():
+                    if norm_alias == h:
                         mapping[key] = idx + 1
                         break
                 if key in mapping:
@@ -373,9 +385,12 @@ class ExcelManager:
         merged_map = build_merged_cell_map(ws)
         applied: list[str] = []
 
+        coerced_leo = coerce_excel_date(updates.leo_date)
+        leo_date_val = coerced_leo if isinstance(coerced_leo, (date, datetime)) else None
+
         field_mapping = {
             "inv_no": updates.invoice_numbers,
-            "leo_date": coerce_excel_date(updates.leo_date),
+            "leo_date": leo_date_val,
             "shipper_name": updates.shipper_name,
             "container_no": updates.container_numbers,
             "container_size": updates.container_sizes,
@@ -408,6 +423,17 @@ class ExcelManager:
                 cell.value = new_val
                 if isinstance(new_val, (date, datetime)) and field_name == "leo_date":
                     cell.number_format = "DD-MMM-YYYY"
+                if "\n" in str(new_val):
+                    from openpyxl.styles import Alignment
+                    current_align = cell.alignment
+                    if current_align:
+                        cell.alignment = Alignment(
+                            horizontal=current_align.horizontal,
+                            vertical=current_align.vertical,
+                            wrap_text=True,
+                        )
+                    else:
+                        cell.alignment = Alignment(wrap_text=True)
                 applied.append(f"{field_name}={new_val}")
 
         return applied

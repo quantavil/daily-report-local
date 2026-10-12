@@ -1,6 +1,7 @@
 """Smoke tests for Excel hardening. No creds, no network needed."""
 
 from datetime import date
+from pathlib import Path
 
 import openpyxl
 
@@ -278,5 +279,119 @@ def test_find_missing_rows_coerces_string_sb_date(tmp_path):
     assert missing[0].sb_date == date(2024, 5, 9)
 
 
+def test_coerce_excel_date_extended_formats():
+    from excel_manager import coerce_excel_date
 
+    assert coerce_excel_date("28-04-2025") == date(2025, 4, 28)
+    assert coerce_excel_date("28.04.2025") == date(2025, 4, 28)
+    assert coerce_excel_date("6.4.2025") == date(2025, 4, 6)
+    assert coerce_excel_date("28.Apr.2025") == date(2025, 4, 28)
+    assert coerce_excel_date("2025/04/28") == date(2025, 4, 28)
+
+
+def test_is_empty_cell_additional_placeholders():
+    from excel_manager import is_empty_cell
+
+    assert is_empty_cell("NULL") is True
+    assert is_empty_cell("null") is True
+    assert is_empty_cell("NIL") is True
+    assert is_empty_cell("nil") is True
+    assert is_empty_cell("--") is True
+    assert is_empty_cell("NOT APPLICABLE") is True
+
+
+def test_resolve_columns_with_linebreaks():
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "FY 2026-27"
+    ws.append(["Shipping Bill\nNo", "Inv\nNo", "LEO\nDate", "Shipper\nName"])
+    mgr = ExcelManager(Path("dummy.xlsx"))
+    mgr.wb = wb
+    col_map = mgr.resolve_columns(ws)
+    assert col_map["sb_no"] == 1
+    assert col_map["inv_no"] == 2
+    assert col_map["leo_date"] == 3
+    assert col_map["shipper_name"] == 4
+
+
+def test_apply_updates_rejects_string_leo_date(tmp_path):
+    from models import CustomsExtractedFields
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "FY 2026-27"
+    ws.append(HEADERS)
+    ws.append(["1278254", None, None, None, None, None, None])
+    path = tmp_path / "reject_leo.xlsx"
+    wb.save(path)
+
+    mgr = ExcelManager(path)
+    mgr.load()
+    col_map = mgr.resolve_columns(mgr.wb["FY 2026-27"])
+
+    updates = CustomsExtractedFields(
+        shipper_name="ACME EXPORTS",
+        leo_date="Pending LEO",  # String that fails date coercion
+    )
+    applied = mgr.apply_updates("FY 2026-27", 2, updates, col_map, force_overwrite=True)
+    target_ws = mgr.wb["FY 2026-27"]
+    assert target_ws.cell(row=2, column=col_map["leo_date"]).value is None
+    assert "leo_date" not in [a.split("=")[0] for a in applied]
+
+
+def test_apply_updates_sets_wrap_text_on_multiline_cells(tmp_path):
+    from models import CustomsExtractedFields
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "FY 2026-27"
+    ws.append(HEADERS)
+    ws.append(["1278254", None, None, None, None, None, None])
+    path = tmp_path / "wrap.xlsx"
+    wb.save(path)
+
+    mgr = ExcelManager(path)
+    mgr.load()
+    col_map = mgr.resolve_columns(mgr.wb["FY 2026-27"])
+
+    updates = CustomsExtractedFields(
+        container_numbers="TCKU7809338\nUNSU0088111",
+    )
+    mgr.apply_updates("FY 2026-27", 2, updates, col_map)
+    cell = mgr.wb["FY 2026-27"].cell(row=2, column=col_map["container_no"])
+    assert cell.alignment.wrap_text is True
+
+
+def test_write_status_handles_merged_cells(tmp_path):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "FY 2026-27"
+    ws.append([*HEADERS, "Status"])
+    ws.append(["1111111", None, None, None, None, None, None, None])
+    ws.append(["2222222", None, None, None, None, None, None, None])
+    ws.merge_cells("H2:H3")
+    path = tmp_path / "merged_status.xlsx"
+    wb.save(path)
+
+    mgr = ExcelManager(path)
+    mgr.load()
+    status_col = len(HEADERS) + 1
+    # Writing to merged child row 3 should write to top-left cell row 2 without crashing
+    assert mgr.write_status("FY 2026-27", 3, status_col, "Success") is True
+    assert mgr.wb["FY 2026-27"].cell(row=2, column=status_col).value == "Success"
+
+
+def test_create_template_sheet_fallback_source(tmp_path):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "DefaultSheet"
+    ws.append(HEADERS)
+    path = tmp_path / "tmpl_fallback.xlsx"
+    wb.save(path)
+
+    mgr = ExcelManager(path)
+    mgr.load()
+    # Source sheet 'NonExistent' falls back to active sheet without throwing KeyError
+    assert mgr.create_template_sheet(name="Template", source="NonExistent") is True
+    assert "Template" in mgr.wb.sheetnames
 

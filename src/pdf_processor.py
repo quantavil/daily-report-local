@@ -6,7 +6,7 @@ import pymupdf
 def classify_document(filename: str, text: str = "") -> str:
     """Classifies document slot: 'eGatepass', 'finalLeo', 'firstCopy', or 'UNKNOWN'."""
     upper_name = filename.upper()
-    code_match = re.search(r"SB(21|22|35)", upper_name)
+    code_match = re.search(r"SB[-_\s]?(21|22|35)(?!\d)", upper_name)
     if code_match:
         code = code_match.group(1)
         if code == "35":
@@ -61,10 +61,13 @@ def trim_pdf(
     if not pdf_input:
         return "", []
 
-    if isinstance(pdf_input, (bytes, bytearray)):
-        doc = pymupdf.open(stream=pdf_input, filetype="pdf")
-    else:
-        doc = pymupdf.open(pdf_input)
+    try:
+        if isinstance(pdf_input, (bytes, bytearray)):
+            doc = pymupdf.open(stream=pdf_input, filetype="pdf")
+        else:
+            doc = pymupdf.open(pdf_input)
+    except Exception:
+        return "", []
 
     try:
         if len(doc) == 0:

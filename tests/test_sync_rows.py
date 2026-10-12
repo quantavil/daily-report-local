@@ -189,6 +189,69 @@ def test_process_documents_unified(monkeypatch):
         assert call_args[1]["doc_type"] == "COMBINED"
 
 
+def test_process_documents_first_copy_only_clears_leo_date(monkeypatch):
+    from unittest.mock import MagicMock, patch
+
+    from models import CustomsExtractedFields
+    from sync import process_documents
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-mock-key")
+
+    mock_trim = MagicMock(return_value=("Sample First Copy text for SB 7602292", [0]))
+    # Mock AI returning hallucinated LEO date and container fields from SB21
+    mock_extract = MagicMock(
+        return_value=CustomsExtractedFields(
+            shipper_name="ACME EXPORTS",
+            invoice_numbers="INV/001",
+            leo_date="09-Oct-2026",
+            container_numbers="HALLUCINATED_CONTAINER",
+            container_sizes="20",
+            customs_seal_numbers="SEAL123",
+        )
+    )
+
+    with patch("sync.trim_pdf", mock_trim), patch("sync.extract_with_ai", mock_extract):
+        docs = {
+            "firstCopy": ("sb21.pdf", b"pdfbytes_sb21"),
+        }
+        res = process_documents(docs, sb_no="7602292")
+        assert res.shipper_name == "ACME EXPORTS"
+        assert res.invoice_numbers == "INV/001"
+        assert res.leo_date is None
+        assert res.container_numbers is None
+        assert res.container_sizes is None
+        assert res.customs_seal_numbers is None
+
+
+def test_process_documents_final_leo_keeps_leo_date_clears_containers(monkeypatch):
+    from unittest.mock import MagicMock, patch
+
+    from models import CustomsExtractedFields
+    from sync import process_documents
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-mock-key")
+
+    mock_trim = MagicMock(return_value=("Sample Final LEO text for SB 7071911", [0]))
+    mock_extract = MagicMock(
+        return_value=CustomsExtractedFields(
+            shipper_name="ACME EXPORTS",
+            invoice_numbers="INV/001",
+            leo_date="08-Oct-2026",
+            container_numbers="HALLUCINATED_CONTAINER",
+        )
+    )
+
+    with patch("sync.trim_pdf", mock_trim), patch("sync.extract_with_ai", mock_extract):
+        docs = {
+            "finalLeo": ("sb22.pdf", b"pdfbytes_sb22"),
+        }
+        res = process_documents(docs, sb_no="7071911")
+        assert res.shipper_name == "ACME EXPORTS"
+        assert res.leo_date == "08-Oct-2026"
+        assert res.container_numbers is None
+
+
+
 def test_cmd_sync_with_sb_filter(tmp_path, monkeypatch):
     import openpyxl
 
@@ -239,3 +302,179 @@ def test_cmd_sync_with_sb_filter(tmp_path, monkeypatch):
     assert target_ws.cell(row=3, column=4).value is None
 
 
+def test_models_clean_placeholders_and_formatting():
+    from models import CustomsExtractedFields
+
+    fields = CustomsExtractedFields(
+        shipper_name="  \"ACME EXPORTS LTD.\" , ",
+        invoice_numbers=["NF/156/2025-26 Dt. 28/04/2025", "INV/002"],
+        leo_date="null",
+        container_numbers="TCKU 7809338\nUNSU-0088111",
+        container_sizes="40 FT\n20",
+        customs_seal_numbers=["SEAL NO: 012345", "Pkg", "SEAL123"],
+    )
+    assert fields.shipper_name == "ACME EXPORTS LTD."
+    assert fields.invoice_numbers == "NF/156/2025-26"
+    assert fields.leo_date is None
+    assert fields.container_numbers == "TCKU7809338\nUNSU0088111"
+    assert fields.container_sizes == "40\n20"
+    assert fields.customs_seal_numbers == "012345\nSEAL123"
+
+
+def test_process_documents_gatepass_only_clears_invoice_numbers(monkeypatch):
+    from unittest.mock import MagicMock, patch
+
+    from models import CustomsExtractedFields
+    from sync import process_documents
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-mock-key")
+
+    mock_trim = MagicMock(return_value=("Sample Gatepass text for SB 1278254", [0]))
+    # Mock AI hallucinating an invoice number from a gatepass
+    mock_extract = MagicMock(
+        return_value=CustomsExtractedFields(
+            shipper_name="ACME EXPORTS",
+            invoice_numbers="HALLUCINATED_INV",
+            leo_date="28-Apr-2025",
+            container_numbers="TCKU7809338",
+            container_sizes="40",
+            customs_seal_numbers="012345",
+        )
+    )
+
+    with patch("sync.trim_pdf", mock_trim), patch("sync.extract_with_ai", mock_extract):
+        docs = {
+            "eGatepass": ("sb35.pdf", b"pdfbytes_sb35"),
+        }
+        res = process_documents(docs, sb_no="1278254")
+        assert res.shipper_name == "ACME EXPORTS"
+        assert res.leo_date == "28-Apr-2025"
+        assert res.container_numbers == "TCKU7809338"
+        # Invariant: Gatepass has no invoice numbers, must be cleared to None
+        assert res.invoice_numbers is None
+
+
+def test_cmd_sync_with_sb_filter_force_on_complete_row(tmp_path, monkeypatch):
+    import openpyxl
+
+    from excel_manager import ExcelManager
+    from models import CustomsExtractedFields
+    from sync import cmd_sync
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-mock-key")
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "FY 2026-27"
+    ws.append(["Shipping Bill No", "Inv No", "LEO Date", "Shipper Name",
+               "Container No.", "Container Size", "Customs Seal Number", "Billing Status"])
+    # Row 2: SB 1278254 already complete
+    ws.append(["1278254", "OLD-INV", "28-Apr-2025", "OLD SHIPPER", "OLDCONT", "20", "OLDSEAL", None])
+    path = tmp_path / "sync_force_complete.xlsx"
+    wb.save(path)
+
+    mgr = ExcelManager(path)
+    mgr.load()
+
+    fetched_sbs = []
+
+    class DummyGmail:
+        def authenticate(self):
+            return True
+        def fetch_documents(self, sb):
+            fetched_sbs.append(sb)
+            return {"eGatepass": ("gp.pdf", b"dummy")}
+
+    mock_extract = CustomsExtractedFields(
+        shipper_name="FORCED SHIPPER",
+        leo_date="10-Sep-2026",
+    )
+
+    from unittest.mock import patch
+    with patch("sync.process_documents", return_value=mock_extract):
+        # With force=True, complete row should be re-fetched and overwritten
+        cmd_sync(mgr, "FY 2026-27", DummyGmail(), workers=1, sb_filter="1278254", force=True)
+
+    assert fetched_sbs == ["1278254"]
+    target_ws = mgr.wb["FY 2026-27"]
+    assert target_ws.cell(row=2, column=4).value == "FORCED SHIPPER"
+
+
+def test_gmail_client_fetch_documents_unpadded_base64():
+    from unittest.mock import MagicMock
+
+    from gmail_client import GmailClient
+
+    client = GmailClient()
+    mock_service = MagicMock()
+    client.service = mock_service
+
+    # Mock list returning 1 message
+    mock_service.users().messages().list().execute.return_value = {
+        "messages": [{"id": "msg1"}]
+    }
+
+    # Mock get returning message payload with attachment
+    mock_service.users().messages().get().execute.return_value = {
+        "payload": {
+            "headers": [{"name": "Subject", "value": "Electronic eGatepass copy of SB for Shipping Bill 1278254"}],
+            "parts": [
+                {
+                    "filename": "1278254_SB35.pdf",
+                    "mimeType": "application/pdf",
+                    "body": {"attachmentId": "att123"},
+                }
+            ],
+        }
+    }
+
+    # Unpadded base64 data ('abc' is length 3, raises error if padding not handled)
+    mock_service.users().messages().attachments().get().execute.return_value = {
+        "data": "abc"
+    }
+
+    docs = client.fetch_documents("1278254")
+    assert "eGatepass" in docs
+    assert docs["eGatepass"][0] == "1278254_SB35.pdf"
+
+
+def test_cmd_verify_cleans_sb_number(tmp_path):
+    from unittest.mock import patch
+
+    import openpyxl
+
+    from excel_manager import ExcelManager
+    from models import CustomsExtractedFields
+    from sync import cmd_verify
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "FY 2026-27"
+    ws.append(["Shipping Bill No", "Inv No", "LEO Date", "Shipper Name",
+               "Container No.", "Container Size", "Customs Seal Number"])
+    # Row 2: SB number formatted as float or with whitespace
+    ws.append(["  1278254  ", "INV1", "28-Apr-2025", "SHIPPER", "CONT1", "20", "SEAL1"])
+    path = tmp_path / "verify_clean.xlsx"
+    wb.save(path)
+
+    mgr = ExcelManager(path)
+    mgr.load()
+
+    queried_sbs = []
+
+    class MockGmail:
+        def authenticate(self):
+            return True
+        def fetch_documents(self, sb_no):
+            queried_sbs.append(sb_no)
+            return {"eGatepass": ("gp.pdf", b"pdfbytes")}
+
+    mock_extract = CustomsExtractedFields(
+        shipper_name="SHIPPER",
+        leo_date="28-Apr-2025",
+    )
+
+    with patch("sync.process_documents", return_value=mock_extract):
+        cmd_verify(mgr, "FY 2026-27", MockGmail(), rows={2})
+
+    assert queried_sbs == ["1278254"]

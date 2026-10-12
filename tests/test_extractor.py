@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from config import require_openrouter_key
-from extractor import _build_prompt, extract_with_ai, get_strict_json_schema
+from extractor import UNIFIED_PROMPT, _build_prompt, extract_with_ai, get_strict_json_schema
 
 
 def test_require_openrouter_key_raises_when_missing(monkeypatch):
@@ -45,6 +45,10 @@ def test_build_prompt_doc_types():
     p_first = _build_prompt("FIRST_COPY")
     assert "First Copy Shipping Bill (SB21)" in p_first
     assert "not granted yet on First Copy" in p_first
+
+    p_combined = _build_prompt("COMBINED")
+    assert "If ONLY First Copy (SB21) is available, LEO has NOT yet been granted" in p_combined
+    assert "NEVER use dates under J.PROCESS DETAILS or Submission/Assessment in SB21" in UNIFIED_PROMPT
 
 
 def test_extract_with_ai_mock_success(monkeypatch):
@@ -126,3 +130,62 @@ def test_extract_with_ai_retries_transient_error(monkeypatch):
         assert res.shipper_name == "RETRY EXPORTS"
         assert mock_client.chat.completions.create.call_count == 2
 
+
+def test_clean_json_payload_with_think_and_text():
+    from extractor import _clean_json_payload
+
+    raw = """<think>I need to parse ICEGATE fields.</think>
+    Here is the JSON result:
+    ```json
+    {"shipper_name": "ACME EXPORTS", "invoice_numbers": "101"}
+    ```
+    Best regards."""
+
+    cleaned = _clean_json_payload(raw)
+    assert cleaned == '{"shipper_name": "ACME EXPORTS", "invoice_numbers": "101"}'
+
+
+def test_clean_json_payload_plain_and_empty():
+    from extractor import _clean_json_payload
+
+    assert _clean_json_payload("") == "{}"
+    assert _clean_json_payload('{"shipper_name": "TEST"}') == '{"shipper_name": "TEST"}'
+
+
+def test_extract_with_ai_handles_think_tags(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-mock-key")
+
+    mock_resp = MagicMock()
+    mock_resp.choices = [
+        MagicMock(
+            message=MagicMock(
+                content='<think>Thinking...</think>```json\n{"shipper_name": "THINK EXPORTS", "invoice_numbers": "INV/333", "leo_date": null, "container_numbers": null, "container_sizes": null, "customs_seal_numbers": null}\n```'
+            )
+        )
+    ]
+
+    with patch("extractor.OpenAI") as mock_openai_cls:
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_resp
+        mock_openai_cls.return_value = mock_client
+
+        res = extract_with_ai("dummy text", "FIRST_COPY", sb_no="1234567")
+        assert res.shipper_name == "THINK EXPORTS"
+        assert res.invoice_numbers == "INV/333"
+
+
+def test_get_openai_client_caches_instance(monkeypatch):
+    import extractor
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-mock-key")
+    extractor._client_instance = None
+
+    with patch("extractor.OpenAI") as mock_openai_cls:
+        mock_instance = MagicMock()
+        mock_instance.api_key = "sk-or-v1-mock-key"
+        mock_openai_cls.return_value = mock_instance
+
+        client1 = extractor.get_openai_client()
+        client2 = extractor.get_openai_client()
+        assert client1 is client2
+        assert mock_openai_cls.call_count == 1

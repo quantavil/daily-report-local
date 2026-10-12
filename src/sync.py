@@ -9,7 +9,7 @@ from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeRemainingColumn
 from rich.table import Table
 
-from config import EXCEL_PATH, require_openrouter_key
+from config import EXCEL_PATH, REQUIRED_DATA_FIELDS, require_openrouter_key
 from excel_manager import (
     ExcelManager,
     build_merged_cell_map,
@@ -21,7 +21,7 @@ from excel_manager import (
 )
 from extractor import extract_with_ai
 from gmail_client import GmailClient
-from models import CustomsExtractedFields
+from models import CustomsExtractedFields, ExcelRow
 from pdf_processor import trim_pdf, verify_identity
 
 console = Console()
@@ -46,6 +46,7 @@ def process_documents(
     ]
 
     combined_sections: list[str] = []
+    valid_slots: set[str] = set()
 
     for slot, doc_type, label in priority:
         if slot not in doc_dict:
@@ -60,12 +61,30 @@ def process_documents(
 
         if text.strip():
             combined_sections.append(f"=== DOCUMENT: {label} ({filename}) ===\n{text.strip()}")
+            valid_slots.add(slot)
 
     if not combined_sections:
         return CustomsExtractedFields()
 
     combined_text = "\n\n".join(combined_sections)
-    return extract_with_ai(combined_text, doc_type="COMBINED", sb_no=sb_no)
+    extracted = extract_with_ai(combined_text, doc_type="COMBINED", sb_no=sb_no)
+
+    # Deterministic guards:
+    # 1. LEO is only granted via Gatepass (SB35) or Final LEO (SB22). If neither is present, clear leo_date.
+    if "eGatepass" not in valid_slots and "finalLeo" not in valid_slots:
+        extracted.leo_date = None
+
+    # 2. Containers, sizes, and seals are ONLY present on Gatepass (Allowed for Movement table).
+    if "eGatepass" not in valid_slots:
+        extracted.container_numbers = None
+        extracted.container_sizes = None
+        extracted.customs_seal_numbers = None
+
+    # 3. Invoice numbers are ONLY present on Shipping Bills (SB21/SB22). If neither is present, clear invoice_numbers.
+    if "finalLeo" not in valid_slots and "firstCopy" not in valid_slots:
+        extracted.invoice_numbers = None
+
+    return extracted
 
 
 def cmd_check(excel_mgr: ExcelManager, sheet_name: str):
@@ -216,25 +235,26 @@ def cmd_verify(
             console.print(f"[dim]Row {n}: beyond sheet data — skipped.[/dim]")
             continue
         sb_no = excel_cell_to_str(ws.cell(row=n, column=sb_col).value)
-        if len(re.sub(r"[^0-9]", "", sb_no)) != 7:
+        sb_clean = re.sub(r"[^0-9]", "", sb_no)
+        if len(sb_clean) != 7:
             console.print(f"[dim]Row {n}: not a 7-digit SB row — skipped.[/dim]")
             continue
         excel = {
             k: excel_cell_to_str(get_effective_cell_value(ws, n, c, merged_map)) if c else ""
             for k, c in field_cols.items()
         }
-        docs = gmail.fetch_documents(sb_no)
+        docs = gmail.fetch_documents(sb_clean)
         if not docs:
-            console.print(f"  [yellow]Row {n} SB {sb_no}[/yellow]: no ICEGATE mail in Gmail — skipped.")
+            console.print(f"  [yellow]Row {n} SB {sb_clean}[/yellow]: no ICEGATE mail in Gmail — skipped.")
             totals["no-docs"] += 1
             continue
         try:
-            merged = process_documents(docs, sb_no=sb_no)
+            merged = process_documents(docs, sb_no=sb_clean)
         except Exception as e:
-            console.print(f"  [red]Row {n} SB {sb_no}: extraction failed: {e}[/red]")
+            console.print(f"  [red]Row {n} SB {sb_clean}: extraction failed: {e}[/red]")
             totals["MISMATCH"] += 1
             continue
-        table = Table(title=f"Row {n} — SB {sb_no} ({len(docs)} doc(s): {', '.join(sorted(docs))})")
+        table = Table(title=f"Row {n} — SB {sb_clean} ({len(docs)} doc(s): {', '.join(sorted(docs))})")
         table.add_column("Field", style="cyan")
         table.add_column("Excel (filled)", style="bold")
         table.add_column("Fresh extract", style="magenta")
@@ -423,10 +443,22 @@ def cmd_sync(
             b_val = get_effective_cell_value(ws, sb_found_row, billing_col, merged_map) if billing_col else None
             if is_cancelled_value(b_val):
                 console.print(f"[dim]ℹ️ Shipping Bill {clean_sb} (Row {sb_found_row}) is marked CANCELLED in sheet '{target_sheet}'. Nothing to sync.[/dim]")  # noqa: RUF001
+                return
+            if force:
+                sb_date_col = col_map.get("sb_date", 0)
+                raw_sb_date = get_effective_cell_value(ws, sb_found_row, sb_date_col, merged_map) if sb_date_col else None
+                coerced_date = coerce_excel_date(raw_sb_date)
+                parsed_sb_date = coerced_date.date() if isinstance(coerced_date, datetime) else (coerced_date if isinstance(coerced_date, date) else None)
+                missing_rows = [ExcelRow(
+                    row_idx=sb_found_row,
+                    sb_no=clean_sb,
+                    sb_date=parsed_sb_date,
+                    missing_fields=list(REQUIRED_DATA_FIELDS),
+                )]
             else:
                 curr_status = ws.cell(row=sb_found_row, column=status_col).value if status_col else "Success"
                 console.print(f"[bold green]✅ Shipping Bill {clean_sb} (Row {sb_found_row}) is already complete (Status: {curr_status}). Nothing to sync.[/bold green]")
-            return
+                return
 
     if not missing_rows:
         if outcomes:
