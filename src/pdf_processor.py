@@ -8,8 +8,16 @@ class PdfConversionError(RuntimeError):
     """A kept PDF page could not be converted to native Markdown."""
 
 
+ICEGATE_FILENAME = re.compile(
+    r"^(\d{7})\d{8}[A-Z0-9]{6}SB(21|22|35)\d{12}(?: \(\d+\))?\.pdf$", re.IGNORECASE,
+)
+
+
 def classify_document(filename: str, text: str = "") -> str:
     """Classifies document slot: 'eGatepass', 'finalLeo', 'firstCopy', or 'UNKNOWN'."""
+    canonical = ICEGATE_FILENAME.fullmatch(filename)
+    if canonical:
+        return {"21": "firstCopy", "22": "finalLeo", "35": "eGatepass"}[canonical.group(2)]
     combined_upper = (filename + " " + text).upper()
     code_match = re.search(r"SB[-_\s]?(21|22|35)(?!\d)", combined_upper)
     if code_match:

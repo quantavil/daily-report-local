@@ -294,6 +294,13 @@ def extract_with_ai(
     )
     raw = str(content) if content is not None else "{}"
     parsed = _parse_response(raw, sb_no, fields)
+    usage = getattr(response, "usage", None)
+    if usage is not None:
+        for key in ("prompt_tokens", "completion_tokens", "cost"):
+            value = getattr(usage, key, None)
+            if type(value) in (int, float) and value >= 0:
+                parsed.ai_usage[key] = value
+        logger.info("SB %s API usage: %s", sb_no, parsed.ai_usage)
 
     # This is runtime-derived only after source and page evidence is validated.
     parsed.leo_date = None

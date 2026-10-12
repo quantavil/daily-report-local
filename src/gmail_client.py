@@ -5,13 +5,14 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import pymupdf
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 from config import GMAIL_CREDENTIALS_FILE, GMAIL_MAX_THREADS, GMAIL_TOKEN_FILE
-from pdf_processor import classify_document
+from pdf_processor import ICEGATE_FILENAME, classify_document, verify_identity
 from pipeline_cache import cache_key
 
 if TYPE_CHECKING:
@@ -168,10 +169,47 @@ class GmailClient:
             query = f'"{sb_no}" ({phrases_or})'
 
         messages_api = service.users().messages()
+        candidates = self._discover_candidates(messages_api, sb_no, query, discover_slots)
+        # Widen only missing LEO slots. Forwarded/replied mail can lack official subjects.
+        missing_leo = {slot for slot in ("eGatepass", "finalLeo") if slot in wanted_slots and not candidates[slot]}
+        if "leo_date" in requested and missing_leo and not first_copy_only:
+            broad = self._discover_candidates(
+                messages_api, sb_no, f'in:anywhere "{sb_no}" has:attachment', missing_leo, broad=True,
+            )
+            for slot in missing_leo:
+                candidates[slot] = broad[slot]
+        self._local.leo_candidates = (sb_no, candidates)
+        selected_candidates = {}
+
+        documents: dict[str, tuple[str, bytes]] = {}
+        download_slots = {"firstCopy"} if first_copy_only else set(wanted_slots)
+        if not first_copy_only and needs_first_copy_fallback and not include_first_copy and not candidates["finalLeo"]:
+            download_slots.add("firstCopy")
+        for slot in sorted(download_slots):
+            slot_candidates = candidates[slot]
+            if not slot_candidates:
+                continue
+            for candidate in sorted(slot_candidates, key=self._candidate_sort_key):
+                raw_bytes = self._download_candidate(messages_api, candidate, slot)
+                if raw_bytes is None:
+                    continue
+                if candidate.get("broad") and not self._pdf_matches_sb(raw_bytes, sb_no):
+                    continue
+                documents[slot] = (candidate["filename"], raw_bytes)
+                selected_candidates[slot] = candidate
+                break
+        self._local.leo_selected = (sb_no, selected_candidates)
+        return documents
+
+    def _discover_candidates(
+        self, messages_api: Any, sb_no: str, query: str, slots: set[str], *, broad: bool = False,
+    ) -> dict[str, list[dict[str, Any]]]:
         summaries: dict[str, dict[str, Any]] = {}
         page_token = None
         while True:
             list_args = {"userId": "me", "q": query, "maxResults": GMAIL_MAX_THREADS}
+            if broad:
+                list_args["includeSpamTrash"] = True
             if page_token:
                 list_args["pageToken"] = page_token
             result = messages_api.list(**list_args).execute()
@@ -181,10 +219,8 @@ class GmailClient:
             page_token = result.get("nextPageToken")
             if not page_token:
                 break
-        if not summaries:
-            return {}
 
-        candidates: dict[str, list[dict[str, Any]]] = {slot: [] for slot in discover_slots}
+        candidates: dict[str, list[dict[str, Any]]] = {slot: [] for slot in slots}
         for message_id in sorted(summaries):
             metadata = messages_api.get(
                 userId="me",
@@ -205,8 +241,11 @@ class GmailClient:
                 mime_type = part.get("mimeType", "")
                 if not filename or not (filename.lower().endswith(".pdf") or "pdf" in mime_type.lower()):
                     continue
+                identity = ICEGATE_FILENAME.fullmatch(filename)
+                if identity and identity.group(1) != sb_no:
+                    continue
                 slot = classify_document(filename, subject)
-                if slot not in discover_slots:
+                if slot not in slots:
                     continue
                 body = part.get("body", {})
                 attachment_id = body.get("attachmentId")
@@ -221,30 +260,63 @@ class GmailClient:
                         "filename": filename,
                         "attachment_id": attachment_id,
                         "raw_data": raw_data,
+                        "broad": broad,
                     }
                 )
 
-        documents: dict[str, tuple[str, bytes]] = {}
-        download_slots = {"firstCopy"} if first_copy_only else set(wanted_slots)
-        if not first_copy_only and needs_first_copy_fallback and not include_first_copy and not candidates["finalLeo"]:
-            download_slots.add("firstCopy")
-        for slot in sorted(download_slots):
-            slot_candidates = candidates[slot]
-            if not slot_candidates:
-                continue
-            newest = min(
-                slot_candidates,
-                key=lambda candidate: (
-                    -candidate["internal_date"],
-                    candidate["message_id"],
-                    candidate["filename"].casefold(),
-                    candidate["attachment_id"] or "",
-                ),
-            )
-            raw_bytes = self._download_candidate(messages_api, newest, slot)
-            if raw_bytes is not None:
-                documents[slot] = (newest["filename"], raw_bytes)
-        return documents
+        return candidates
+
+    @staticmethod
+    def _candidate_sort_key(candidate: dict[str, Any]) -> tuple:
+        return (
+            -candidate["internal_date"], candidate["message_id"],
+            candidate["filename"].casefold(), candidate["attachment_id"] or "",
+        )
+
+    @staticmethod
+    def _pdf_matches_sb(raw_bytes: bytes, sb_no: str) -> bool:
+        document = None
+        try:
+            document = pymupdf.open(stream=raw_bytes, filetype="pdf")
+            return bool(document.page_count and verify_identity(document[0].get_text(), sb_no))
+        except Exception:
+            return False
+        finally:
+            if document is not None:
+                document.close()
+
+    def iter_leo_versions(self, sb_no: str, current: dict[str, tuple[str, bytes]]):
+        """Lazily download older distinct sources from this worker's fresh metadata snapshot."""
+        discovery = getattr(self._local, "leo_candidates", None)
+        selected = getattr(self._local, "leo_selected", None)
+        if not discovery or discovery[0] != sb_no or not selected or selected[0] != sb_no:
+            return
+        messages_api = self.service.users().messages()
+        state = {slot: doc for slot, doc in current.items() if slot in {"eGatepass", "finalLeo"}}
+        remaining = {}
+        for slot in state:
+            candidates = sorted(discovery[1].get(slot, []), key=self._candidate_sort_key)
+            index = next((i for i, item in enumerate(candidates) if item == selected[1].get(slot)), None)
+            if index is not None:
+                remaining[slot] = iter(candidates[index + 1:])
+        seen = {slot: {cache_key(raw)} for slot, (_filename, raw) in state.items()}
+        while remaining:
+            changed = False
+            for slot, candidates in list(remaining.items()):
+                for candidate in candidates:
+                    raw = self._download_candidate(messages_api, candidate, slot)
+                    if raw is None or cache_key(raw) in seen[slot]:
+                        continue
+                    seen[slot].add(cache_key(raw))
+                    # Let process_documents check identity/conversion/evidence.
+                    # Unreadable versions must block recovery, not be skipped.
+                    state[slot] = (candidate["filename"], raw)
+                    changed = True
+                    break
+                else:
+                    del remaining[slot]
+            if changed:
+                yield dict(state)
 
     @staticmethod
     def _iter_parts(part: dict[str, Any]):

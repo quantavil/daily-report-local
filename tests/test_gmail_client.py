@@ -277,3 +277,90 @@ def test_attachment_cache_does_not_cross_message_ids_with_same_attachment_id():
         ("second-message", "shared-att")
     ]
 
+
+def _pdf(sb_no):
+    import pymupdf
+
+    document = pymupdf.open()
+    try:
+        document.new_page().insert_text((72, 72), f"Shipping Bill No: {sb_no}")
+        return document.tobytes()
+    finally:
+        document.close()
+
+
+def test_forwarded_canonical_filename_is_classified_without_subject_hint():
+    from pdf_processor import classify_document
+
+    assert classify_document("123456717092026INMBD6SB22180920260930.pdf", "Fwd: Documents") == "finalLeo"
+    assert classify_document("123456717092026INMBD6SB35180920260930 (1).pdf", "Fwd: Documents") == "eGatepass"
+
+
+def test_broad_fallback_finds_forwarded_matching_pdf_and_rejects_other_sb():
+    expected_pdf = _pdf("1234567")
+    records = {
+        "wrong": _record("Re: 1234567", 300, "765432117092026INMBD6SB22180920260930.pdf", "wrong-att", _pdf("7654321")),
+        "right": _record("Fwd: PDFs", 200, "123456717092026INMBD6SB22180920260930.pdf", "right-att", expected_pdf),
+    }
+    client = _client(records)
+
+    def search(**kwargs):
+        client.service.messages_api.list_calls.append(kwargs)
+        messages = [{"id": "wrong"}, {"id": "right"}] if kwargs["q"].startswith("in:anywhere") else []
+        return FakeRequest(lambda: {"messages": messages})
+
+    client.service.messages_api.list = search
+    documents = client.fetch_documents("1234567", fields={"leo_date"})
+    assert documents == {"finalLeo": ("123456717092026INMBD6SB22180920260930.pdf", expected_pdf)}
+    assert client.service.messages_api.list_calls[-1]["includeSpamTrash"] is True
+    assert client.service.messages_api.attachments_api.calls == [("right", "right-att")]
+
+
+def test_history_download_is_lazy_and_skips_identical_repeated_pdfs():
+    latest = _pdf("1234567")
+    older = _pdf("1234567")
+    records = {
+        "new": _record("eGatepass", 300, "new_SB35.pdf", "new-att", latest),
+        "repeat": _record("eGatepass", 200, "repeat_SB35.pdf", "repeat-att", latest),
+        "old": _record("eGatepass", 100, "old_SB35.pdf", "old-att", older),
+    }
+    client = _client(records)
+    documents = client.fetch_documents("1234567", fields={"container_no"})
+    assert client.service.messages_api.attachments_api.calls == [("new", "new-att")]
+    versions = client.iter_leo_versions("1234567", documents)
+    assert next(versions) == {"eGatepass": ("old_SB35.pdf", older)}
+    assert client.service.messages_api.attachments_api.calls == [
+        ("new", "new-att"), ("repeat", "repeat-att"), ("old", "old-att"),
+    ]
+
+
+def test_history_starts_after_selected_attachment_even_when_filenames_repeat():
+    valid = _pdf("1234567")
+    records = {
+        "bad": _record("Fwd: Gatepass", 300, "same_SB35.pdf", "bad-att", b"not a PDF"),
+        "good": _record("Fwd: Gatepass", 200, "same_SB35.pdf", "good-att", valid),
+        "old": _record("Fwd: Gatepass", 100, "old_SB35.pdf", "old-att", _pdf("1234567")),
+    }
+    client = _client(records)
+
+    def search(**kwargs):
+        messages = [{"id": key} for key in records] if kwargs["q"].startswith("in:anywhere") else []
+        return FakeRequest(lambda: {"messages": messages})
+
+    client.service.messages_api.list = search
+    documents = client.fetch_documents("1234567", fields={"leo_date"})
+    assert documents["eGatepass"] == ("same_SB35.pdf", valid)
+    list(client.iter_leo_versions("1234567", documents))
+    assert client.service.messages_api.attachments_api.calls.count(("good", "good-att")) == 1
+
+
+def test_history_does_not_silently_skip_an_unreadable_version():
+    latest = _pdf("1234567")
+    client = _client({
+        "new": _record("eGatepass", 300, "new_SB35.pdf", "new-att", latest),
+        "broken": _record("eGatepass", 200, "broken_SB35.pdf", "broken-att", b"broken PDF"),
+        "old": _record("eGatepass", 100, "old_SB35.pdf", "old-att", _pdf("1234567")),
+    })
+    docs = client.fetch_documents("1234567", fields={"container_no"})
+    assert next(client.iter_leo_versions("1234567", docs)) == {"eGatepass": ("broken_SB35.pdf", b"broken PDF")}
+

@@ -71,6 +71,20 @@ class PipelineMetrics:
         self._lock = threading.Lock()
         self._seconds = {"gmail": 0.0, "conversion": 0.0, "ai": 0.0, "excel_save": 0.0}
         self._cache_hits = {"conversion": 0, "ai": 0}
+        self._usage = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cost": 0.0, "priced": 0}
+
+    def add_usage(self, usage: dict) -> None:
+        """Count successful API responses; cost is reported only when supplied by the provider."""
+        with self._lock:
+            self._usage["calls"] += 1
+            for key in ("prompt_tokens", "completion_tokens"):
+                value = usage.get(key)
+                if type(value) is int and value >= 0:
+                    self._usage[key] += value
+            cost = usage.get("cost")
+            if type(cost) in (int, float) and cost >= 0:
+                self._usage["cost"] += cost
+                self._usage["priced"] += 1
 
     def add_seconds(self, stage: str, seconds: float) -> None:
         with self._lock:
@@ -84,15 +98,19 @@ class PipelineMetrics:
         with self._lock:
             seconds = dict(self._seconds)
             hits = dict(self._cache_hits)
+            usage = dict(self._usage)
         return (
             "Pipeline: elapsed {elapsed:.1f}s; worker time sums — Gmail {gmail:.1f}s, "
             "conversion {conversion:.1f}s ({conversion_hits} cache hit(s)), "
-            "AI {ai:.1f}s ({ai_hits} cache hit(s)); Excel saves {excel_save:.1f}s"
+            "AI {ai:.1f}s ({ai_hits} cache hit(s)); Excel saves {excel_save:.1f}s; "
+            "API responses {calls}: {prompt_tokens} input / {completion_tokens} output tokens; "
+            "reported cost ${cost:.6f} ({priced}/{calls} responses priced)"
         ).format(
             elapsed=elapsed,
             **seconds,
             conversion_hits=hits["conversion"],
             ai_hits=hits["ai"],
+            **usage,
         )
 
 
@@ -185,8 +203,8 @@ def _raw_ai_cache_key(
     )
 
 
-def _read_cached_ai(cache: PipelineCache, key: str) -> CustomsExtractedFields | None:
-    cached = cache.get_json("ai", key)
+def _read_cached_ai(cache: PipelineCache, key: str, namespace: str = "ai") -> CustomsExtractedFields | None:
+    cached = cache.get_json(namespace, key)
     if not isinstance(cached, dict):
         return None
     warning = cached.get("leo_warning")
@@ -209,15 +227,28 @@ def _write_cached_ai(
     key: str,
     raw_fields: dict,
     warning: str | None,
+    namespace: str = "ai",
 ) -> None:
     payload = deepcopy(raw_fields)
     payload["leo_date"] = None
     payload["leo_warning"] = warning
-    cache.put_json("ai", key, {
+    cache.put_json(namespace, key, {
         "fields": payload,
         "leo_warning": warning,
         "record_hash": cache_key("ai-cache-record-v1", payload, warning),
     })
+
+
+def _leo_cache_key(sb_no: str, source_identity: tuple) -> str:
+    """Reuse only evidence from the exact same eligible PDFs and extraction rules."""
+    return cache_key(
+        "leo-observations-v1", sb_no,
+        tuple(item for item in source_identity if item[0] in {"eGatepass", "finalLeo"}),
+        OPENROUTER_MODEL, OPENROUTER_BASE_URL, CONVERTER_VERSION,
+        MODEL_VALIDATOR_VERSION, LEO_VALIDATOR_VERSION,
+        _build_prompt("COMBINED"), get_strict_json_schema(),
+        _build_prompt("COMBINED", {"leo_date"}), get_strict_json_schema({"leo_date"}),
+    )
 
 
 def _target_sheet(excel_mgr: ExcelManager, sheet_name: str) -> str:
@@ -231,6 +262,8 @@ def _print_leo_evidence(extracted: CustomsExtractedFields) -> None:
     warning = getattr(extracted, "leo_warning", None)
     if warning:
         console.print(f"[yellow]LEO not verified: {warning}[/yellow]")
+    if extracted.leo_source_note:
+        console.print(extracted.leo_source_note, markup=False)
     for item in getattr(extracted, "leo_evidence", []):
         console.print(
             f"  {item.doc_type}, page {item.page_number}, {item.label}: {item.raw_date or '(blank)'}",
@@ -317,10 +350,15 @@ def process_documents(
         for slot, (filename, raw_bytes) in sorted(selected_docs.items())
     )
     ai_cache_key = _raw_ai_cache_key(combined_text, sb_no, requested, source_identity)
+    leo_cache_key = _leo_cache_key(sb_no, source_identity)
     raw_ai_fields: dict | None = None
     extracted = None
     if cache is not None and not refresh:
         extracted = _read_cached_ai(cache, ai_cache_key)
+        if extracted is None:
+            extracted = _read_cached_ai(cache, ai_cache_key, "ai_unresolved")
+        if extracted is None and leo_only and not conversion_failures:
+            extracted = _read_cached_ai(cache, leo_cache_key, "leo_observations")
         if extracted is not None and metrics:
             metrics.cache_hit("ai")
 
@@ -334,10 +372,11 @@ def process_documents(
         )
         if metrics:
             metrics.add_seconds("ai", time.perf_counter() - started)
-        # Preserve a pre-validation snapshot; the live result is filtered and its LEO
-        # evidence is replaced with accepted evidence below.
-        raw_ai_fields = extracted.model_dump(mode="json")
-        raw_ai_fields["leo_warning"] = extracted.leo_warning
+            metrics.add_usage(extracted.ai_usage)
+    # Preserve cached and fresh raw observations before filtering. This also lets
+    # existing full-result caches seed narrower LEO reuse after revalidation.
+    raw_ai_fields = extracted.model_dump(mode="json")
+    raw_ai_fields["leo_warning"] = extracted.leo_warning
     raw_ai_warning = raw_ai_fields.get("leo_warning") if raw_ai_fields is not None else None
     extracted.conversion_errors = conversion_errors
 
@@ -393,16 +432,22 @@ def process_documents(
     if "customs_seal" not in requested:
         extracted.customs_seal_numbers = None
 
-    # Do not treat malformed AI output or rejected/ambiguous LEO observations as a
-    # successful cache result. A later run must ask the model again.
+    # Store source-bound rejections separately from successful results. Replaying
+    # either record still runs the current validator; refresh explicitly retries AI.
     if (
         cache is not None
         and raw_ai_fields is not None
         and not conversion_failures
         and not raw_ai_warning
-        and not extracted.leo_warning
     ):
-        _write_cached_ai(cache, ai_cache_key, raw_ai_fields, None)
+        namespace = "ai_unresolved" if extracted.leo_warning else "ai"
+        _write_cached_ai(cache, ai_cache_key, raw_ai_fields, None, namespace)
+        if "leo_date" in requested:
+            # This alias contains observations, not an accepted result. Blank and
+            # rejected observations also avoid another paid request for the same PDFs.
+            _write_cached_ai(cache, leo_cache_key, {
+                "leo_evidence": raw_ai_fields["leo_evidence"],
+            }, None, "leo_observations")
 
     return extracted
 
@@ -691,6 +736,36 @@ def _fetch_and_extract_worker(
             if selected_docs
             else CustomsExtractedFields()
         )
+
+        # A blank reissue is not a conflicting date. Consult history only after
+        # every latest eligible label was explicitly reported and validated blank.
+        if (
+            "leo_date" in requested
+            and extracted.leo_warning == "eligible LEO/order fields are blank"
+            and extracted.leo_evidence
+            and all(item.raw_date is None for item in extracted.leo_evidence)
+            and not extracted.conversion_errors
+        ):
+            for historical_docs in gmail.iter_leo_versions(sb_no, selected_docs):
+                historical = process_documents(
+                    historical_docs, sb_no=sb_no, fields={"leo_date"},
+                    cache=cache, refresh=refresh, metrics=metrics,
+                )
+                if historical.leo_date and not historical.leo_warning and not historical.conversion_errors:
+                    extracted.leo_date = historical.leo_date
+                    extracted.leo_evidence = historical.leo_evidence
+                    extracted.leo_warning = None
+                    extracted.leo_source_note = "LEO verified from earlier source version(s): " + ", ".join(
+                        filename for filename, _raw in historical_docs.values()
+                    )
+                    selected_docs.update(historical_docs)
+                    console.print(f"  {extracted.leo_source_note}", markup=False)
+                    break
+                if historical.leo_warning != "eligible LEO/order fields are blank" or historical.conversion_errors:
+                    # Do not search past a rejected/conflicting historical version.
+                    extracted.leo_warning = historical.leo_warning or "Historical LEO source could not be verified."
+                    extracted.conversion_errors.extend(historical.conversion_errors)
+                    break
 
         fallback_fields = {
             field for field in requested & _SB21_FIELDS

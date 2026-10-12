@@ -51,6 +51,8 @@ class CustomsExtractedFields(BaseModel):
         exclude=True,
         description="Runtime conversion failures for selected source documents.",
     )
+    leo_source_note: str | None = Field(default=None, exclude=True)
+    ai_usage: dict = Field(default_factory=dict, exclude=True)
     container_numbers: str | None = Field(
         default=None,
         description="ISO container numbers (e.g. UNSU0088111, TCKU7809338)."

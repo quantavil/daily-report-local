@@ -284,7 +284,10 @@ def resolve_leo_date(
 
     distinct_dates = {parsed for _item, _anchor, parsed in validated if parsed is not None}
     if not distinct_dates:
-        return LeoDateValidation(None, "eligible LEO/order fields are blank")
+        return LeoDateValidation(
+            None, "eligible LEO/order fields are blank",
+            accepted_evidence=[item for item, _anchor, _parsed in validated],
+        )
     if len(distinct_dates) != 1:
         return LeoDateValidation(None, "conflicting LEO dates across eligible source observations")
 

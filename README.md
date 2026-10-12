@@ -18,10 +18,11 @@ Set `OPENROUTER_API_KEY` in `.env`. The default model is `meta/muse-spark-1.3-co
 ## Workflow
 
 1. Select valid seven-digit Shipping Bill rows from the named sheet. Skip cancelled bills.
-2. Discover Gmail attachment metadata and choose the newest revision of each needed type. Use SB22 Final LEO and SB35 Gatepass first; fetch SB21 First Copy only as an invoice/exporter fallback.
+2. Discover Gmail attachment metadata and choose the newest revision of each needed type. Use SB22 Final LEO and SB35 Gatepass first; fetch SB21 First Copy only as an invoice/exporter fallback. For missing LEO document types, widen the search to attachments anywhere in Gmail, including Spam/Trash. Canonical ICEGATE filenames identify the document type even in forwarded mail; mismatching SB filenames are excluded and broadly discovered PDFs must pass a page-one SB identity check.
 3. Reuse unchanged PDF bytes and native conversions from the private cache. Select pages with unsorted PyMuPDF text and convert them to AnyDoc Markdown with original page numbers. LEO-only retains Gatepass/SB22 page one.
-4. Request only selected fields using a strict JSON schema. Reuse matching cached AI observations; otherwise make one combined OpenRouter call. Missing invoice/exporter information can require one extra scoped SB21 call. Extraction remains AI-powered; there is no regex parser fallback.
+4. Request only selected fields using a strict JSON schema. Reuse matching cached AI observations; otherwise make one combined OpenRouter call. Well-formed full-extraction LEO observations, including blanks/rejections, can also satisfy a later LEO-only request for the exact same eligible PDFs after revalidation. Missing invoice/exporter information can require one extra scoped SB21 call. Extraction remains AI-powered; there is no regex parser fallback.
 5. Validate fresh and cached AI-selected LEO evidence against the current document, page, label, and exact quotation. Reject unsupported or conflicting dates; never trust a cached derived date alone.
+   If every latest eligible LEO field is explicitly verified blank, lazily inspect older distinct versions using the same AI/evidence validator. Stop at the first validated date or a rejected/conflicting/unreadable version. Historical recovery changes only LEO; invoice/exporter/container values retain their newest-source extraction. The console identifies earlier source filenames used.
 6. Write selected cells sequentially. Preserve formulas and non-empty cells unless forced. Save a timestamped backup before each workbook save; retain the latest five backups.
 
 **OCR is off.** A selected page that needs OCR produces a clear error; no hosted OCR request or raw-text conversion fallback occurs.
@@ -96,7 +97,9 @@ Gmail metadata is searched fresh for each selected bill. Attachment identity reu
 
 Normal sync requests missing fields. When SB21 arrives first, invoice/exporter can be filled provisionally; later SB22/Gatepass supply pending fields. Filled fields are reconsidered with `--force`; `--refresh` additionally requires fresh AI. Read-only verification always uses fresh AI.
 
-Stage seconds are accumulated across concurrent workers and can exceed wall time. Cache-hit counts cover conversion and AI; attachment hits are not counted. This phase retains complete LEO page-one context and one combined request for selected fields. A Gmail history cursor, aggressive cropping, lower reasoning settings and a local parser are not implemented.
+Unchanged source-bound blank/rejected LEO observations are cached separately from successful results and are revalidated on every reuse. They cannot supply a date until validation accepts it. Changed PDFs, model/prompt/converter/validator changes, `--refresh`, or `--no-cache` trigger fresh extraction. Malformed AI responses, temporary API failures and conversion failures are not cached as unresolved results. Full-result caches seed narrower LEO reuse after validation; no cached derived date is trusted.
+
+Stage seconds are accumulated across concurrent workers and can exceed wall time. Cache-hit counts cover conversion and AI; attachment hits are not counted. The summary also shows successful API response count, returned input/output tokens, and reported cost in USD with the number of responses supplying cost. Missing cost is not estimated; reported totals can be partial and exclude failures without usage. This phase retains complete LEO page-one context and one combined request for selected fields. A Gmail history cursor, aggressive cropping, lower reasoning settings and a local parser are not implemented.
 
 ## Development
 

@@ -404,3 +404,19 @@ def test_extract_with_ai_fallback_unparseable_json(monkeypatch):
         assert res.shipper_name is None
         assert res.leo_date is None
 
+
+def test_extraction_reports_provider_usage_as_runtime_metadata():
+    from types import SimpleNamespace
+
+    client = MagicMock()
+    client.chat.completions.create.return_value = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content='{"invoice_numbers":"INV-1"}'))],
+        usage=SimpleNamespace(prompt_tokens=123, completion_tokens=45, cost=0.0009),
+    )
+    with patch("extractor.get_openai_client", return_value=client):
+        result = extract_with_ai("context", fields={"inv_no"})
+    assert result.ai_usage == {"prompt_tokens": 123, "completion_tokens": 45, "cost": 0.0009}
+    assert "ai_usage" not in result.model_dump()
+    assert "ai_usage" not in get_strict_json_schema()["properties"]
+    assert "leo_source_note" not in get_strict_json_schema()["properties"]
+
