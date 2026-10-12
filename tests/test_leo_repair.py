@@ -6,6 +6,7 @@ import openpyxl
 
 from excel_manager import ExcelManager
 from models import CustomsExtractedFields
+from pdf_processor import PdfConversionError
 from sync import cmd_sync
 
 HEADERS = ["Shipping Bill No", "Inv No", "LEO Date", "Shipper Name", "Container No.",
@@ -162,6 +163,57 @@ def test_malformed_sb21_fallback_keeps_existing_leo_and_partial_status(tmp_path,
 
     assert manager.wb.active.cell(2, 3).value == datetime(2026, 6, 6)
     assert manager.wb.active.cell(2, 9).value == "Partial"
+
+
+def test_conversion_error_with_sb21_fallback_writes_invoice_but_marks_error(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "fake-unit-test-key")
+    manager = workbook(tmp_path, [ORIGINAL])
+
+    class ConversionFailureGmail(Gmail):
+        def fetch_documents(self, sb, *, fields=None, include_first_copy=False):
+            self.fetched.append((sb, include_first_copy))
+            if include_first_copy:
+                return {"firstCopy": ("sb21.pdf", b"sb21")}
+            return {
+                "eGatepass": ("gatepass.pdf", b"gatepass"),
+                "finalLeo": ("sb22.pdf", b"needs-ocr"),
+            }
+
+    def trim(raw_bytes, doc_type, *, leo_only=False):
+        if raw_bytes == b"needs-ocr":
+            raise PdfConversionError("page 2 requires OCR")
+        text = "--- SOURCE PAGE 1 ---\nShipping Bill No: 3924868"
+        if raw_bytes == b"gatepass":
+            text += "\n1.Order No / date 1/101 08-JUN-26"
+        else:
+            text += "\n2.INV NO. INV-SB21"
+        return text, [0]
+
+    def extract(text, doc_type="COMBINED", sb_no="", fields=None):
+        if "First Copy Shipping Bill (SB21)" in text:
+            return CustomsExtractedFields(invoice_numbers="INV-SB21")
+        return CustomsExtractedFields(
+            shipper_name="GATEPASS EXPORTER",
+            leo_evidence=[{
+                "doc_type": "EGATEPASS",
+                "page_number": 1,
+                "label": "1.Order No / date",
+                "raw_date": "08-JUN-26",
+                "quote": "1.Order No / date 1/101 08-JUN-26",
+            }],
+        )
+
+    monkeypatch.setattr("sync.trim_pdf", trim)
+    monkeypatch.setattr("sync.extract_with_ai", extract)
+
+    cmd_sync(manager, "FY 2026-27", ConversionFailureGmail(), force=True, workers=1)
+
+    assert manager.wb.active.cell(2, 2).value == "INV-SB21"
+    assert manager.wb.active.cell(2, 3).value == datetime(2026, 6, 6)
+    assert manager.wb.active.cell(2, 4).value == "GATEPASS EXPORTER"
+    assert manager.wb.active.cell(2, 9).value == "Error"
 
 
 def test_invalid_sheet_refuses_fallback_before_writing(tmp_path, monkeypatch):
