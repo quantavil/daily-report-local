@@ -13,7 +13,13 @@ cp .env.example .env
 
 Set `OPENROUTER_API_KEY` in `.env`. The default model is `meta/muse-spark-1.3-contributor`; `OPENROUTER_MODEL` can override it. Save a Google OAuth Desktop client as `credentials.json` and enable the Gmail API. The first Gmail run opens consent and saves `token.json`. Gmail access is read-only.
 
-`.env`, credentials, tokens, and Excel workbooks are ignored by Git.
+`.env`, credentials, tokens, caches, workbook backups and other Excel files are ignored by Git. The root `Daily Working Report.xlsx` is intentionally tracked and published with this repository.
+
+## Daily report
+
+[Download Daily Working Report.xlsx](Daily%20Working%20Report.xlsx). This repository is public, so the committed workbook is publicly accessible. It is a snapshot; local sync changes reach GitHub only after committing and pushing the workbook again.
+
+The 12 October 2026 repair validated LEO evidence for 1,728 bills, corrected 42 existing dates and filled 15 blanks. Another 43 bills lack validated LEO evidence; their dates or blanks were preserved. These results concern LEO, not independent validation of every workbook field.
 
 ## Workflow
 
@@ -108,7 +114,7 @@ uv run --no-sync pytest -q
 uv run --no-sync ruff check src/ tests/ sync.py
 ```
 
-The package lives flat in `src/`; root `sync.py` is a CLI shim. Tests use synthetic data and mocked external boundaries. Private PDFs and workbooks do not belong in commits.
+The package lives flat in `src/`; root `sync.py` is a CLI shim. Tests use synthetic data and mocked external boundaries. Only the root daily report workbook is approved for tracking; source PDFs, private extraction artifacts, other workbooks and backups remain local.
 
 ## Troubleshooting
 
