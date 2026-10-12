@@ -56,6 +56,8 @@ def is_page_relevant(page_num: int, text: str, doc_type: str) -> bool:
 def trim_pdf(
     pdf_input: bytes | str,
     doc_type: str = "UNKNOWN",
+    *,
+    leo_only: bool = False,
 ) -> tuple[str, list[int]]:
     """
     Uses unsorted PyMuPDF native text only to select relevant pages, then converts
@@ -81,12 +83,16 @@ def trim_pdf(
         if len(doc) == 0:
             return "", []
 
-        kept_indices: list[int] = []
-
-        for i, page in enumerate(doc):
-            page_text = page.get_text()
-            if is_page_relevant(i, page_text, doc_type):
-                kept_indices.append(i)
+        if leo_only:
+            # LEO evidence is eligible only on original page one. Convert the
+            # entire page so identity and complete source rows remain intact.
+            kept_indices = [0]
+        else:
+            kept_indices: list[int] = []
+            for i, page in enumerate(doc):
+                page_text = page.get_text()
+                if is_page_relevant(i, page_text, doc_type):
+                    kept_indices.append(i)
 
         if not kept_indices:
             kept_indices = [0]

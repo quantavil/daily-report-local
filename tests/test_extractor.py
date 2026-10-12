@@ -69,6 +69,13 @@ def test_leo_only_schema_contains_only_evidence_and_keeps_nested_strictness():
     }
 
 
+def test_non_leo_schema_omits_unreferenced_evidence_definitions():
+    schema = get_strict_json_schema({"inv_no"})
+
+    assert set(schema["properties"]) == {"invoice_numbers"}
+    assert "$defs" not in schema
+
+
 def test_evidence_array_is_not_cleaned_as_a_scalar_placeholder():
     from models import CustomsExtractedFields, LeoDateEvidence
 

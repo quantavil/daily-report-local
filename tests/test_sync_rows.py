@@ -134,7 +134,7 @@ def test_cmd_sync_stamps_cancelled(tmp_path, monkeypatch):
     class DummyGmail:
         def authenticate(self):
             return True
-        def fetch_documents(self, sb):
+        def fetch_documents(self, sb, *, fields=None, include_first_copy=False):
             return {}
 
     cmd_sync(mgr, "FY 2026-27", DummyGmail(), workers=3)
@@ -160,7 +160,7 @@ def test_process_documents_unified(monkeypatch):
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-mock-key")
 
-    def mock_trim(pdf_bytes, doc_type):
+    def mock_trim(pdf_bytes, doc_type, *, leo_only=False):
         if doc_type == "EGATEPASS":
             return ("Shipping Bill No: 1234567\n1.Order No / date 1/101 10-Sep-2026", [0])
         return (
@@ -352,7 +352,7 @@ def test_process_documents_conflict_refuses_leo_and_keeps_other_fields(monkeypat
         "5.Submission 06-JUN-26 6.LEO Date 09-JUN-26\n9.LEO 09-JUN-26"
     )
 
-    def mock_trim(_pdf_bytes, doc_type):
+    def mock_trim(_pdf_bytes, doc_type, *, leo_only=False):
         return (gatepass_text if doc_type == "EGATEPASS" else final_text, [0])
 
     mock_extract = MagicMock(
@@ -431,11 +431,12 @@ def test_cmd_sync_with_sb_filter(tmp_path, monkeypatch):
     class DummyGmail:
         def authenticate(self):
             return True
-        def fetch_documents(self, sb):
+        def fetch_documents(self, sb, *, fields=None, include_first_copy=False):
             fetched_sbs.append(sb)
             return {"eGatepass": ("gp.pdf", b"dummy")}
 
     mock_extract = CustomsExtractedFields(
+        invoice_numbers="TARGET-INV",
         shipper_name="TARGET SHIPPER",
         leo_date="10-Sep-2026",
     )
@@ -545,11 +546,12 @@ def test_cmd_sync_with_sb_filter_force_on_complete_row(tmp_path, monkeypatch):
     class DummyGmail:
         def authenticate(self):
             return True
-        def fetch_documents(self, sb):
+        def fetch_documents(self, sb, *, fields=None, include_first_copy=False):
             fetched_sbs.append(sb)
             return {"eGatepass": ("gp.pdf", b"dummy")}
 
     mock_extract = CustomsExtractedFields(
+        invoice_numbers="FORCED-INV",
         shipper_name="FORCED SHIPPER",
         leo_date="10-Sep-2026",
     )
@@ -630,11 +632,12 @@ def test_cmd_verify_cleans_sb_number(tmp_path, monkeypatch):
     class MockGmail:
         def authenticate(self):
             return True
-        def fetch_documents(self, sb_no):
+        def fetch_documents(self, sb_no, *, fields=None, include_first_copy=False):
             queried_sbs.append(sb_no)
             return {"eGatepass": ("gp.pdf", b"pdfbytes")}
 
     mock_extract = CustomsExtractedFields(
+        invoice_numbers="INV1",
         shipper_name="SHIPPER",
         leo_date="28-Apr-2025",
     )
@@ -748,11 +751,12 @@ def test_cmd_sync_with_rows_filter_force_on_complete_row(tmp_path, monkeypatch):
     class DummyGmail:
         def authenticate(self):
             return True
-        def fetch_documents(self, sb):
+        def fetch_documents(self, sb, *, fields=None, include_first_copy=False):
             queried_sbs.append(sb)
             return {"eGatepass": ("gp.pdf", b"dummy")}
 
     mock_extract = CustomsExtractedFields(
+        invoice_numbers="ROWS-INV",
         shipper_name="FORCED BY ROWS",
         leo_date="10-Sep-2026",
     )

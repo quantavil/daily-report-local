@@ -217,6 +217,8 @@ def get_strict_json_schema(fields: set[str] | None = None) -> dict[str, Any]:
     schema["properties"] = {
         name: value for name, value in schema.get("properties", {}).items() if name in requested
     }
+    if "leo_evidence" not in schema["properties"]:
+        schema.pop("$defs", None)
 
     def make_strict(node: Any) -> None:
         if isinstance(node, dict):

@@ -35,7 +35,7 @@ class Gmail:
     def authenticate(self):
         return True
 
-    def fetch_documents(self, sb):
+    def fetch_documents(self, sb, *, fields=None, include_first_copy=False):
         self.fetched.append(sb)
         return {"finalLeo": ("sb22.pdf", b"external-boundary-placeholder")}
 
@@ -122,6 +122,48 @@ def test_forced_leo_missing_evidence_preserves_date_and_flags_partial(tmp_path, 
     assert manager.wb.active.cell(2, 9).value == "Partial"
 
 
+def test_forced_malformed_ai_keeps_filled_values_and_reports_incomplete(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "fake-unit-test-key")
+    manager = workbook(tmp_path, [ORIGINAL])
+    malformed = CustomsExtractedFields(leo_warning="AI returned malformed response")
+
+    with patch("sync.process_documents", return_value=malformed):
+        cmd_sync(manager, "FY 2026-27", Gmail(), force=True, workers=1)
+
+    assert manager.wb.active.cell(2, 2).value == "INV-OLD"
+    assert manager.wb.active.cell(2, 3).value == datetime(2026, 6, 6)
+    assert manager.wb.active.cell(2, 9).value == "Partial"
+
+    from sync import _warning_detail
+
+    assert _warning_detail("AI returned malformed response", ["inv_no"], malformed) == (
+        "Extraction incomplete: AI returned malformed response"
+    )
+
+
+def test_malformed_sb21_fallback_keeps_existing_leo_and_partial_status(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "fake-unit-test-key")
+    manager = workbook(tmp_path, [ORIGINAL])
+
+    class FallbackGmail(Gmail):
+        def fetch_documents(self, sb, *, fields=None, include_first_copy=False):
+            self.fetched.append(sb)
+            if include_first_copy:
+                return {"firstCopy": ("sb21.pdf", b"sb21")}
+            return {"finalLeo": ("sb22.pdf", b"sb22")}
+
+    def process(_docs, *, fields, **_kwargs):
+        if fields == {"inv_no", "shipper_name"}:
+            return CustomsExtractedFields(leo_warning="AI returned malformed response")
+        return CustomsExtractedFields()
+
+    with patch("sync.process_documents", side_effect=process):
+        cmd_sync(manager, "FY 2026-27", FallbackGmail(), force=True, workers=1)
+
+    assert manager.wb.active.cell(2, 3).value == datetime(2026, 6, 6)
+    assert manager.wb.active.cell(2, 9).value == "Partial"
+
+
 def test_invalid_sheet_refuses_fallback_before_writing(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "fake-unit-test-key")
     import pytest
@@ -146,13 +188,79 @@ def test_leo_audit_prints_evidence_without_saving(tmp_path, monkeypatch, capsys)
         doc_type="FINAL_LEO", page_number=1, label="6.LEO Date", raw_date="08-JUN-26",
         quote="6.LEO Date 08-JUN-26",
     )])
-    with patch("sync.process_documents", return_value=fields):
+    with patch("sync.process_documents", return_value=fields) as process:
         cmd_verify(manager, "FY 2026-27", Gmail(), rows={2}, leo_only=True)
+    process.assert_called_once()
+    assert process.call_args.kwargs["fields"] == {"leo_date"}
+    assert process.call_args.kwargs.get("cache") is None
+    assert process.call_args.kwargs["refresh"] is True
     assert manager.file_path.read_bytes() == before
     assert not list(tmp_path.glob("repair.bak-*.xlsx"))
     output = capsys.readouterr().out
     assert "6.LEO Date" in output
     assert "MISMATCH" in output
+
+
+def test_audit_uses_scoped_sb21_fallback_without_saving(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "fake-unit-test-key")
+    from sync import cmd_verify
+
+    manager = workbook(tmp_path, [ORIGINAL])
+    before = manager.file_path.read_bytes()
+    calls = []
+
+    class FallbackGmail(Gmail):
+        def fetch_documents(self, sb, *, fields=None, include_first_copy=False):
+            self.fetched.append((sb, include_first_copy))
+            if include_first_copy:
+                return {"firstCopy": ("sb21.pdf", b"sb21")}
+            return {"finalLeo": ("sb22.pdf", b"sb22")}
+
+    def process(docs, *, fields, cache=None, refresh=False, **_kwargs):
+        calls.append((set(fields), set(docs), cache, refresh))
+        if "firstCopy" in docs:
+            return CustomsExtractedFields(invoice_numbers="INV-SB21")
+        return CustomsExtractedFields(shipper_name="NEW SHIPPER")
+
+    with patch("sync.process_documents", side_effect=process):
+        gmail = FallbackGmail()
+        cmd_verify(manager, "FY 2026-27", gmail, rows={2})
+
+    output = capsys.readouterr().out
+    assert gmail.fetched == [("3924868", False), ("3924868", True)]
+    assert calls[0][1] == {"finalLeo"}
+    assert calls[1][0] == {"inv_no"}
+    assert calls[1][1] == {"firstCopy"}
+    assert calls[0][2:] == (None, True)
+    assert calls[1][2:] == (None, True)
+    assert "INV-SB21" in output
+    assert "MISMATCH" in output
+    assert manager.file_path.read_bytes() == before
+    assert not list(tmp_path.glob("repair.bak-*.xlsx"))
+
+
+def test_leo_audit_reports_no_eligible_documents_for_selected_fields(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "fake-unit-test-key")
+    from sync import cmd_verify
+
+    manager = workbook(tmp_path, [ORIGINAL])
+
+    class FirstCopyOnlyGmail(Gmail):
+        def fetch_documents(self, sb, *, fields=None, include_first_copy=False):
+            return {"firstCopy": ("sb21.pdf", b"sb21")}
+
+    cmd_verify(
+        manager,
+        "FY 2026-27",
+        FirstCopyOnlyGmail(),
+        rows={2},
+        leo_only=True,
+    )
+
+    output = capsys.readouterr().out
+    assert "No eligible ICEGATE documents for selected fields" in output
 
 
 def test_skipping_filled_cells_does_not_clear_a_previous_rejection(tmp_path, monkeypatch):
@@ -178,7 +286,7 @@ def test_completed_pdf_payloads_are_released_before_checkpoint(tmp_path, monkeyp
     manager = workbook(tmp_path, [ORIGINAL.copy() for _ in range(25)])
     payloads = []
 
-    def worker(row, sb, missing, gmail):
+    def worker(row, sb, missing, gmail, cache=None, refresh=False, metrics=None):
         docs = Documents(finalLeo=("sb22.pdf", b"pdf-payload"))
         payloads.append(weakref.ref(docs))
         return row, sb, missing, docs, extracted(), None

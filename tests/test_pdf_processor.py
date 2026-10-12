@@ -74,6 +74,23 @@ def test_trim_pdf_converts_kept_pages_to_markdown_with_original_page_markers():
     assert "08-JUN-26" in text
 
 
+def test_trim_pdf_leo_profile_selects_only_original_page_one():
+    doc = pymupdf.open()
+    first = doc.new_page()
+    first.insert_text((50, 50), "Shipping Bill No: 1278254 6.LEO Date 08-JUN-26")
+    second = doc.new_page()
+    second.insert_text((50, 50), "6.LEO Date 09-JUN-26")
+    pdf_bytes = doc.tobytes()
+    doc.close()
+
+    text, kept = trim_pdf(pdf_bytes, "FINAL_LEO", leo_only=True)
+
+    assert kept == [0]
+    assert "SOURCE PAGE 1" in text
+    assert "08-JUN-26" in text
+    assert "09-JUN-26" not in text
+
+
 def test_trim_pdf_does_not_fall_back_when_anydoc_requires_ocr():
     import pytest
 
