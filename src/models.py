@@ -1,11 +1,27 @@
 import re
 from datetime import date
+from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+class LeoDateEvidence(BaseModel):
+    """AI-selected LEO date with a source-bound quotation for runtime validation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    doc_type: Literal["EGATEPASS", "FINAL_LEO"]
+    page_number: int = Field(ge=1, description="Original one-based PDF page number.")
+    label: str = Field(description="One eligible LEO label from the cited document.")
+    raw_date: str | None = Field(description="Exact associated date token; null only for a demonstrably blank field.")
+    quote: str = Field(description="Exact source quotation containing the label and date token.")
 
 
 class CustomsExtractedFields(BaseModel):
     """Structured customs data model for Pydantic v2 validation and OpenRouter output."""
+
+    model_config = ConfigDict(extra="forbid")
+
     shipper_name: str | None = Field(
         default=None,
         description="Exporter / Shipper company or entity name strictly without address details."
@@ -16,7 +32,19 @@ class CustomsExtractedFields(BaseModel):
     )
     leo_date: str | None = Field(
         default=None,
-        description="LEO Date or Gatepass Order Date formatted as DD-Mon-YYYY (e.g. 28-Apr-2025)."
+        description="Validated LEO date formatted as DD-Mon-YYYY. Derived from leo_evidence at runtime."
+    )
+    leo_evidence: list[LeoDateEvidence] = Field(
+        default_factory=list,
+        description=(
+            "Source observations for Gatepass 1.Order No / date and SB22 6.LEO Date or 9.LEO. "
+            "Do not include First Copy observations."
+        ),
+    )
+    leo_warning: str | None = Field(
+        default=None,
+        exclude=True,
+        description="Runtime explanation when LEO evidence cannot be trusted.",
     )
     container_numbers: str | None = Field(
         default=None,
@@ -31,7 +59,15 @@ class CustomsExtractedFields(BaseModel):
         description="Customs seal numbers."
     )
 
-    @field_validator("*", mode="before")
+    @field_validator(
+        "shipper_name",
+        "invoice_numbers",
+        "leo_date",
+        "container_numbers",
+        "container_sizes",
+        "customs_seal_numbers",
+        mode="before",
+    )
     @classmethod
     def clean_placeholders(cls, v):
         if v is None:

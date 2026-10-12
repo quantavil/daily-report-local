@@ -55,6 +55,55 @@ def test_trim_pdf_single_page():
     assert "Allowed for Movement" in text
 
 
+def test_trim_pdf_converts_kept_pages_to_markdown_with_original_page_markers():
+    doc = pymupdf.open()
+    first = doc.new_page()
+    first.insert_text((50, 50), "Allowed for Movement: container row")
+    second = doc.new_page()
+    second.insert_text((50, 50), "1.Order No / date 1/101 08-JUN-26")
+    pdf_bytes = doc.tobytes()
+    doc.close()
+
+    text, kept = trim_pdf(pdf_bytes, "EGATEPASS")
+
+    assert kept == [0, 1]
+    assert "--- SOURCE PAGE 1 ---" in text
+    assert "--- SOURCE PAGE 2 ---" in text
+    assert text.index("SOURCE PAGE 1") < text.index("SOURCE PAGE 2")
+    assert "Allowed for Movement" in text
+    assert "08-JUN-26" in text
+
+
+def test_trim_pdf_does_not_fall_back_when_anydoc_requires_ocr():
+    import pytest
+
+    pixmap = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 40, 40), 0)
+    pixmap.clear_with(0xFFFFFF)
+    png = pixmap.tobytes("png")
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_image(page.rect, stream=png)
+    pdf_bytes = doc.tobytes()
+    doc.close()
+
+    with pytest.raises(RuntimeError, match="OCR is disabled"):
+        trim_pdf(pdf_bytes, "EGATEPASS")
+
+
+def test_trim_pdf_rejects_empty_anydoc_markdown(monkeypatch):
+    import pytest
+
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((50, 50), "Allowed for Movement")
+    pdf_bytes = doc.tobytes()
+    doc.close()
+    monkeypatch.setattr("anydoc.to_markdown_bytes", lambda *_args, **_kwargs: "")
+
+    with pytest.raises(RuntimeError, match="returned no Markdown"):
+        trim_pdf(pdf_bytes, "EGATEPASS")
+
+
 def test_verify_identity():
     assert verify_identity("Shipping Bill No. 1278254 Date: 28-Apr-2025", "1278254") is True
     assert verify_identity("SBNO: 1278254", "1278254") is True

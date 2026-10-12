@@ -21,11 +21,31 @@ from excel_manager import (
 )
 from extractor import extract_with_ai
 from gmail_client import GmailClient
+from leo_validation import resolve_leo_date
 from models import CustomsExtractedFields, ExcelRow
-from pdf_processor import trim_pdf, verify_identity
+from pdf_processor import split_source_pages, trim_pdf, verify_identity
 
 console = Console()
 app = typer.Typer(add_completion=False)
+
+
+def _target_sheet(excel_mgr: ExcelManager, sheet_name: str) -> str:
+    sheets = excel_mgr.get_sheet_names()
+    if sheet_name not in sheets:
+        raise typer.BadParameter(f"Sheet {sheet_name!r} not found; available: {', '.join(sheets)}")
+    return sheet_name
+
+
+def _print_leo_evidence(extracted: CustomsExtractedFields) -> None:
+    warning = getattr(extracted, "leo_warning", None)
+    if warning:
+        console.print(f"[yellow]LEO not verified: {warning}[/yellow]")
+    for item in getattr(extracted, "leo_evidence", []):
+        console.print(
+            f"  {item.doc_type}, page {item.page_number}, {item.label}: {item.raw_date or '(blank)'}",
+            markup=False,
+        )
+        console.print("    " + item.quote, markup=False)
 
 
 def process_documents(
@@ -47,7 +67,7 @@ def process_documents(
 
     combined_sections: list[str] = []
     valid_slots: set[str] = set()
-
+    source_contexts: dict[str, dict[int, str]] = {}
     for slot, doc_type, label in priority:
         if slot not in doc_dict:
             continue
@@ -62,6 +82,7 @@ def process_documents(
         if text.strip():
             combined_sections.append(f"=== DOCUMENT: {label} ({filename}) ===\n{text.strip()}")
             valid_slots.add(slot)
+            source_contexts[slot] = split_source_pages(text)
 
     if not combined_sections:
         return CustomsExtractedFields()
@@ -69,8 +90,15 @@ def process_documents(
     combined_text = "\n\n".join(combined_sections)
     extracted = extract_with_ai(combined_text, doc_type="COMBINED", sb_no=sb_no)
 
+    leo_result = resolve_leo_date(extracted.leo_evidence, source_contexts)
+    extracted.leo_date = leo_result.leo_date
+    extracted.leo_evidence = leo_result.accepted_evidence
+    extracted.leo_warning = extracted.leo_warning or leo_result.warning
+    if leo_result.warning:
+        console.print(f"  [yellow]⚠ LEO date not applied: {leo_result.warning}[/yellow]")
+
     # Deterministic guards:
-    # 1. LEO is only granted via Gatepass (SB35) or Final LEO (SB22). If neither is present, clear leo_date.
+    # 1. LEO is only granted via validated Gatepass (SB35) or Final LEO (SB22) evidence.
     if "eGatepass" not in valid_slots and "finalLeo" not in valid_slots:
         extracted.leo_date = None
 
@@ -93,7 +121,7 @@ def cmd_check(excel_mgr: ExcelManager, sheet_name: str):
     sheets = excel_mgr.get_sheet_names()
     console.print(f"Available Sheets: [bold green]{', '.join(sheets)}[/bold green]\n")
 
-    target_sheet = sheet_name if sheet_name in sheets else sheets[-1]
+    target_sheet = _target_sheet(excel_mgr, sheet_name)
     console.print(f"Scanning sheet: [bold yellow]{target_sheet}[/bold yellow]...")
 
     try:
@@ -197,13 +225,14 @@ def cmd_verify(
     sheet_name: str,
     gmail: GmailClient,
     rows: set[int],
+    leo_only: bool = False,
 ):
     """Dry-run audit: re-extracts each row's SB from Gmail and diffs vs Excel.
 
     Read-only: never writes cells, never saves the workbook.
     """
-    sheets = excel_mgr.get_sheet_names()
-    target_sheet = sheet_name if sheet_name in sheets else sheets[-1]
+    require_openrouter_key()
+    target_sheet = _target_sheet(excel_mgr, sheet_name)
     console.print(Panel.fit(
         f"[bold cyan]Audit (read-only, workbook untouched):[/bold cyan] "
         f"{excel_mgr.file_path.name} | Sheet: [bold yellow]{target_sheet}[/bold yellow]"
@@ -260,10 +289,13 @@ def cmd_verify(
         table.add_column("Fresh extract", style="magenta")
         table.add_column("Verdict", style="bold")
         for field, ev, gv, verdict in compare_audit(excel, merged):
+            if leo_only and field != "leo":
+                continue
             totals[verdict] = totals.get(verdict, 0) + 1
             color = {"match": "green", "MISMATCH": "red", "order": "yellow"}.get(verdict, "dim")
             table.add_row(field, ev, gv, f"[{color}]{verdict}[/{color}]")
         console.print(table)
+        _print_leo_evidence(merged)
 
     console.print(
         f"\n[bold]Audit totals:[/bold] [green]{totals['match']} match[/green], "
@@ -340,155 +372,95 @@ def cmd_sync(
     rows: set[int] | None = None,
     workers: int = 3,
     sb_filter: str | None = None,
+    leo_only: bool = False,
 ):
-    """Runs full automated sync: Gmail search -> PDF trim -> Extract -> Update Excel in place."""
+    """Fetch, extract and write selected rows; --force includes filled rows."""
     try:
         require_openrouter_key()
     except RuntimeError as e:
         console.print(f"[bold red]❌ {e}[/bold red]")
         raise typer.Exit(code=1) from e
 
-    sheets = excel_mgr.get_sheet_names()
-    target_sheet = sheet_name if sheet_name in sheets else sheets[-1]
-
-    console.print(Panel.fit(f"[bold cyan]Starting Sync on:[/bold cyan] {excel_mgr.file_path.name} | Sheet: [bold yellow]{target_sheet}[/bold yellow]"))
-
-    # Status column on the target sheet (replaces 'Additional Remarks').
-    status_col = excel_mgr.ensure_status_column(target_sheet)
-
-    try:
-        missing_rows, col_map = excel_mgr.find_missing_rows(target_sheet)
-    except ValueError as e:
-        console.print(f"[bold red]❌ {e}[/bold red]")
-        raise typer.Exit(code=1) from e
-
-    outcomes: list[tuple[int, str, str, str]] = []  # row_idx, sb_no, status, detail
-
+    clean_filter = re.sub(r"[^0-9]", "", sb_filter) if sb_filter is not None else None
+    if clean_filter is not None and len(clean_filter) != 7:
+        raise typer.BadParameter("Shipping Bill number must be 7 digits")
+    target_sheet = _target_sheet(excel_mgr, sheet_name)
     ws = excel_mgr.wb[target_sheet]
-    sb_col = col_map.get("sb_no", 0)
-    billing_col = col_map.get("billing_status", 0)
+    col_map = excel_mgr.resolve_columns(ws)
+    if not col_map.get("sb_no"):
+        raise typer.BadParameter(f"No Shipping Bill No column in {target_sheet!r}")
+    if leo_only and not col_map.get("leo_date"):
+        raise typer.BadParameter(f"No LEO Date column in {target_sheet!r}")
+    status_col = excel_mgr.ensure_status_column(target_sheet)
+    col_map = excel_mgr.resolve_columns(ws)
     merged_map = build_merged_cell_map(ws)
-    hit = {r.row_idx for r in missing_rows}
+    sb_col = col_map["sb_no"]
+    billing_col = col_map.get("billing_status", 0)
+    selected_fields = {"leo_date"} if leo_only else set(REQUIRED_DATA_FIELDS)
+    outcomes: list[tuple[int, str, str, str]] = []
+    missing_rows: list[ExcelRow] = []
+    sb_found = False
 
-    # 1. Automatically stamp cancelled shipping bills
-    stamped_cancelled = 0
-    if billing_col and status_col:
-        for n in range(2, ws.max_row + 1):
-            if sb_col:
-                sb_no = excel_cell_to_str(ws.cell(row=n, column=sb_col).value)
-                if len(re.sub(r"[^0-9]", "", sb_no)) == 7:
-                    b_val = get_effective_cell_value(ws, n, billing_col, merged_map)
-                    if is_cancelled_value(b_val):
-                        curr = ws.cell(row=n, column=status_col).value
-                        if curr != "Cancelled":
-                            excel_mgr.write_status(target_sheet, n, status_col, "Cancelled")
-                            stamped_cancelled += 1
-                        if rows is not None and n in rows:
-                            outcomes.append((n, sb_no, "Cancelled", "billing status is cancelled"))
-        if stamped_cancelled:
-            excel_mgr.save()
-            console.print(f"[bold dim]✔ Stamped {stamped_cancelled} cancelled rows as 'Cancelled'.[/bold dim]")
+    def missing_at(row_idx: int) -> list[str]:
+        return [
+            field for field in REQUIRED_DATA_FIELDS
+            if col_map.get(field) and is_empty_cell(
+                get_effective_cell_value(ws, row_idx, col_map[field], merged_map)
+            )
+        ]
 
-    # 2. Stamp existing complete rows
-    if rows is not None:
-        for n in sorted(rows - hit):
-            if not sb_col or n < 2 or n > ws.max_row:
-                console.print(f"[dim]Row {n}: beyond sheet data — skipped.[/dim]")
-                continue
-            sb_no = excel_cell_to_str(ws.cell(row=n, column=sb_col).value)
-            clean_sb = re.sub(r"[^0-9]", "", sb_no)
-            if len(clean_sb) != 7:
-                console.print(f"[dim]Row {n}: not a 7-digit SB row — skipped.[/dim]")
-                continue
-            if billing_col and is_cancelled_value(get_effective_cell_value(ws, n, billing_col, merged_map)):
-                continue
-            if force:
-                sb_date_col = col_map.get("sb_date", 0)
-                raw_sb_date = get_effective_cell_value(ws, n, sb_date_col, merged_map) if sb_date_col else None
-                coerced_date = coerce_excel_date(raw_sb_date)
-                parsed_sb_date = coerced_date.date() if isinstance(coerced_date, datetime) else (coerced_date if isinstance(coerced_date, date) else None)
-                missing_rows.append(ExcelRow(
-                    row_idx=n,
-                    sb_no=clean_sb,
-                    sb_date=parsed_sb_date,
-                    missing_fields=list(REQUIRED_DATA_FIELDS),
-                ))
-            else:
-                excel_mgr.write_status(target_sheet, n, status_col, "Success")
-                outcomes.append((n, sb_no, "Success", "already complete"))
-        missing_rows = [r for r in missing_rows if r.row_idx in rows]
-    elif sb_filter is not None:
-        pass
-    else:
-        stamped_existing = 0
-        for n in range(2, ws.max_row + 1):
-            if n not in hit and sb_col:
-                sb_no = excel_cell_to_str(ws.cell(row=n, column=sb_col).value)
-                if len(re.sub(r"[^0-9]", "", sb_no)) == 7:
-                    if billing_col and is_cancelled_value(get_effective_cell_value(ws, n, billing_col, merged_map)):
-                        continue
-                    curr = ws.cell(row=n, column=status_col).value
-                    if is_empty_cell(curr):
-                        excel_mgr.write_status(target_sheet, n, status_col, "Success")
-                        stamped_existing += 1
-        if stamped_existing:
-            excel_mgr.save()
-            console.print(f"[bold green]✔ Stamped {stamped_existing} existing complete rows as 'Success'.[/bold green]")
+    console.print(Panel.fit(
+        f"[bold cyan]Starting {'LEO repair' if leo_only and force else 'sync'}:[/bold cyan] "
+        f"{excel_mgr.file_path.name} | Sheet: [bold yellow]{target_sheet}[/bold yellow]"
+    ))
+    # One selection pass for normal, forced, row-filtered and SB-filtered runs.
+    # Status writes obey the same scope as data writes.
+    for n in range(2, ws.max_row + 1):
+        if rows is not None and n not in rows:
+            continue
+        sb_no = re.sub(r"[^0-9]", "", excel_cell_to_str(
+            get_effective_cell_value(ws, n, sb_col, merged_map)
+        ))
+        if len(sb_no) != 7 or (clean_filter is not None and sb_no != clean_filter):
+            continue
+        sb_found = True
+        billing = get_effective_cell_value(ws, n, billing_col, merged_map) if billing_col else None
+        if is_cancelled_value(billing):
+            excel_mgr.write_status(target_sheet, n, status_col, "Cancelled")
+            outcomes.append((n, sb_no, "Cancelled", "billing status is cancelled"))
+            continue
+        missing = missing_at(n)
+        requested = [f for f in REQUIRED_DATA_FIELDS if f in selected_fields and col_map.get(f)]
+        needed = requested if force else [f for f in missing if f in selected_fields]
+        if not needed:
+            previous = get_effective_cell_value(ws, n, status_col, merged_map)
+            status = "Partial" if missing else "Success"
+            detail = "already filled" if not missing else "still missing: " + ", ".join(missing)
+            if not missing and previous in ("Partial", "Error", "Not found"):
+                status, detail = previous, "previous result retained; re-extract with --force"
+            excel_mgr.write_status(target_sheet, n, status_col, status)
+            outcomes.append((n, sb_no, status, detail))
+            continue
+        sb_date_col = col_map.get("sb_date", 0)
+        raw_sb_date = get_effective_cell_value(ws, n, sb_date_col, merged_map) if sb_date_col else None
+        coerced = coerce_excel_date(raw_sb_date)
+        parsed_date = coerced.date() if isinstance(coerced, datetime) else coerced if isinstance(coerced, date) else None
+        missing_rows.append(ExcelRow(row_idx=n, sb_no=sb_no, sb_date=parsed_date, missing_fields=needed))
 
-    if sb_filter is not None:
-        clean_sb = re.sub(r"[^0-9]", "", sb_filter)
-        if len(clean_sb) != 7:
-            console.print(f"[bold red]❌ Invalid Shipping Bill number '{sb_filter}': must be 7 digits.[/bold red]")
-            raise typer.Exit(code=1)
-
-        sb_found_row = None
-        for n in range(2, ws.max_row + 1):
-            if sb_col and re.sub(r"[^0-9]", "", excel_cell_to_str(ws.cell(row=n, column=sb_col).value)) == clean_sb:
-                sb_found_row = n
-                break
-
-        if sb_found_row is None:
-            console.print(f"[yellow]⚠️ Shipping Bill {clean_sb} not found in sheet '{target_sheet}'.[/yellow]")
-            return
-
-        missing_rows = [r for r in missing_rows if r.sb_no == clean_sb]
-        if not missing_rows:
-            b_val = get_effective_cell_value(ws, sb_found_row, billing_col, merged_map) if billing_col else None
-            if is_cancelled_value(b_val):
-                console.print(f"[dim]ℹ️ Shipping Bill {clean_sb} (Row {sb_found_row}) is marked CANCELLED in sheet '{target_sheet}'. Nothing to sync.[/dim]")  # noqa: RUF001
-                return
-            if force:
-                sb_date_col = col_map.get("sb_date", 0)
-                raw_sb_date = get_effective_cell_value(ws, sb_found_row, sb_date_col, merged_map) if sb_date_col else None
-                coerced_date = coerce_excel_date(raw_sb_date)
-                parsed_sb_date = coerced_date.date() if isinstance(coerced_date, datetime) else (coerced_date if isinstance(coerced_date, date) else None)
-                missing_rows = [ExcelRow(
-                    row_idx=sb_found_row,
-                    sb_no=clean_sb,
-                    sb_date=parsed_sb_date,
-                    missing_fields=list(REQUIRED_DATA_FIELDS),
-                )]
-            else:
-                curr_status = ws.cell(row=sb_found_row, column=status_col).value if status_col else "Success"
-                console.print(f"[bold green]✅ Shipping Bill {clean_sb} (Row {sb_found_row}) is already complete (Status: {curr_status}). Nothing to sync.[/bold green]")
-                return
-
+    if clean_filter is not None and not sb_found:
+        console.print(f"[yellow]Shipping Bill {clean_filter} not found in the selected rows.[/yellow]")
     if not missing_rows:
         if outcomes:
             excel_mgr.save()
-            console.print("[bold green]✅ Requested rows are already complete — statuses stamped.[/bold green]")
-        else:
-            console.print("[bold green]✅ All rows are already complete! Nothing to sync.[/bold green]")
+        console.print("[green]No selected cells need extraction. Use --force to re-extract filled values.[/green]")
         return
 
     worker_count = max(1, min(workers, 8))
-    console.print(f"Syncing [bold red]{len(missing_rows)}[/bold red] rows with missing fields using [bold cyan]{worker_count} worker(s)[/bold cyan].")
+    console.print(f"Extracting [bold red]{len(missing_rows)}[/bold red] selected rows with [bold cyan]{worker_count} worker(s)[/bold cyan].")
 
     if not gmail.authenticate():
         console.print("[red]❌ Could not authenticate with Gmail. Place credentials.json in this folder to enable Gmail fetching.[/red]")
         return
-
-    updated_count = 0
 
     try:
         with Progress(
@@ -521,12 +493,22 @@ def cmd_sync(
                             excel_mgr.write_status(target_sheet, row_idx, status_col, status)
                             outcomes.append((row_idx, sb_no, status, detail))
                         else:
-                            applied = excel_mgr.apply_updates(target_sheet, row_idx, extracted, col_map, force_overwrite=force)
-                            status, detail = summarize_outcome(missing_fields, applied, docs_found=True)
+                            applied = excel_mgr.apply_updates(
+                                target_sheet, row_idx, extracted, col_map,
+                                force_overwrite=force, fields=selected_fields,
+                            )
+                            remaining = missing_at(row_idx)
+                            warning = getattr(extracted, "leo_warning", None)
+                            if warning or ("leo_date" in missing_fields and not extracted.leo_date):
+                                reason = warning or "no validated date in eligible documents"
+                                status, detail = "Partial", "LEO unchanged: " + reason
+                            elif remaining:
+                                status, detail = "Partial", "still missing: " + ", ".join(remaining)
+                            else:
+                                status, detail = "Success", f"{len(applied)} field(s) filled"
                             excel_mgr.write_status(target_sheet, row_idx, status_col, status)
                             outcomes.append((row_idx, sb_no, status, detail))
                             if applied:
-                                updated_count += 1
                                 progress.console.print(f"  [green]✔ SB {sb_no} (Row {row_idx})[/green]: Updated {', '.join(applied)}")
                     except Exception as e:
                         progress.console.print(f"  [bold red]❌ SB {row_item.sb_no} (Row {row_item.row_idx}): {e}[/bold red]")
@@ -580,7 +562,8 @@ def cli(
     sheet: str = typer.Option("FY 2026-27", "--sheet", help="Sheet name (defaults to FY 2026-27)"),
     check: bool = typer.Option(False, "--check", help="Audit missing fields in Excel without making changes"),
     sb: str | None = typer.Option(None, "--sb", help="Filter for single 7-digit Shipping Bill number"),
-    force: bool = typer.Option(False, "--force", help="Force overwrite existing non-empty values"),
+    force: bool = typer.Option(False, "--force", help="Re-extract every selected row, including filled values"),
+    leo_only: bool = typer.Option(False, "--leo-only", help="Write only LEO dates; combine with --force to repair filled dates"),
     rows: str | None = typer.Option(None, "--rows", help="Limit sync to Excel rows, e.g. '1349-1351' or '1349,1350,1351'"),
     verify_rows: str | None = typer.Option(None, "--verify-rows", help="Read-only audit: re-extract rows and diff vs filled Excel, e.g. '2-20'"),
     workers: int = typer.Option(3, "--workers", help="Number of concurrent worker threads (default 3, max 8)"),
@@ -597,7 +580,7 @@ def cli(
         cmd_check(excel_mgr, sheet)
     elif verify_rows:
         gmail = GmailClient()
-        cmd_verify(excel_mgr, sheet, gmail, parse_row_spec(verify_rows))
+        cmd_verify(excel_mgr, sheet, gmail, parse_row_spec(verify_rows), leo_only=leo_only)
     else:
         gmail = GmailClient()
         cmd_sync(
@@ -608,6 +591,7 @@ def cli(
             rows=parse_row_spec(rows) if rows else None,
             workers=workers,
             sb_filter=sb,
+            leo_only=leo_only,
         )
 
 

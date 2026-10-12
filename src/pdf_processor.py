@@ -1,6 +1,11 @@
 import re
 
+import anydoc
 import pymupdf
+
+
+class PdfConversionError(RuntimeError):
+    """A kept PDF page could not be converted to native Markdown."""
 
 
 def classify_document(filename: str, text: str = "") -> str:
@@ -53,9 +58,9 @@ def trim_pdf(
     doc_type: str = "UNKNOWN",
 ) -> tuple[str, list[int]]:
     """
-    Fast in-memory scanning of PDF pages using PyMuPDF.
-    Discards redundant pages, slashes token size by 80-90%,
-    and returns (combined_text, kept_page_indices).
+    Uses unsorted PyMuPDF native text only to select relevant pages, then converts
+    each selected original page independently through AnyDoc. The returned text
+    includes one-based source page markers and kept_page_indices remains zero-based.
     Properly closes the document to prevent native memory leaks.
     """
     if not pdf_input:
@@ -77,24 +82,64 @@ def trim_pdf(
             return "", []
 
         kept_indices: list[int] = []
-        text_chunks: list[str] = []
 
         for i, page in enumerate(doc):
             page_text = page.get_text()
             if is_page_relevant(i, page_text, doc_type):
                 kept_indices.append(i)
-                text_chunks.append(page_text)
 
         if not kept_indices:
             kept_indices = [0]
-            text_chunks = [doc[0].get_text()]
+
+        text_chunks: list[str] = []
+        for page_index in kept_indices:
+            selected_page = pymupdf.open()
+            try:
+                selected_page.insert_pdf(doc, from_page=page_index, to_page=page_index)
+                page_bytes = selected_page.tobytes()
+            finally:
+                selected_page.close()
+
+            try:
+                markdown = anydoc.to_markdown_bytes(page_bytes, "pdf", ocr="reject")
+            except anydoc.NeedsOcrError as exc:
+                raise PdfConversionError(
+                    f"PDF page {page_index + 1} requires OCR; OCR is disabled for native AnyDoc conversion."
+                ) from exc
+            except anydoc.ConvertError as exc:
+                raise PdfConversionError(
+                    f"AnyDoc could not convert PDF page {page_index + 1} to Markdown: {exc}"
+                ) from exc
+            if not markdown.strip():
+                raise PdfConversionError(f"AnyDoc returned no Markdown for PDF page {page_index + 1}.")
+
+            text_chunks.append(f"--- SOURCE PAGE {page_index + 1} ---\n{markdown.strip()}")
 
         combined_text = "\n\n".join(text_chunks)
         return combined_text, kept_indices
+    except PdfConversionError:
+        raise
     except Exception:
         return "", []
     finally:
         doc.close()
+
+
+_SOURCE_PAGE_RE = re.compile(r"(?m)^--- SOURCE PAGE (\d+) ---\s*$")
+
+
+def split_source_pages(markdown: str) -> dict[int, str]:
+    """Returns converted Markdown by original one-based page number."""
+    matches = list(_SOURCE_PAGE_RE.finditer(markdown))
+    if not matches:
+        return {1: markdown} if markdown.strip() else {}
+
+    pages: dict[int, str] = {}
+    for index, match in enumerate(matches):
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(markdown)
+        pages[int(match.group(1))] = markdown[start:end].strip()
+    return pages
 
 
 def verify_identity(text: str, expected_sb_no: str) -> bool:

@@ -27,8 +27,55 @@ def test_strict_json_schema_structure():
     assert set(schema["required"]) == set(schema["properties"].keys())
     assert "shipper_name" in schema["required"]
     assert "invoice_numbers" in schema["required"]
-    assert "leo_date" in schema["required"]
+    assert "leo_evidence" in schema["required"]
+    assert "leo_date" not in schema["properties"]
     assert "container_numbers" in schema["required"]
+
+
+def test_strict_json_schema_requires_typed_evidence_and_excludes_runtime_leo_fields():
+    schema = get_strict_json_schema()
+    props = schema["properties"]
+
+    assert "leo_evidence" in schema["required"]
+    assert "leo_evidence" in props
+    assert "leo_date" not in props
+    assert "leo_warning" not in props
+    assert props["leo_evidence"]["type"] == "array"
+
+    evidence_schema = props["leo_evidence"]["items"]
+    if "$ref" in evidence_schema:
+        evidence_name = evidence_schema["$ref"].rsplit("/", 1)[-1]
+        evidence_schema = schema["$defs"][evidence_name]
+    assert evidence_schema["type"] == "object"
+    assert evidence_schema["additionalProperties"] is False
+    assert set(evidence_schema["required"]) == {
+        "doc_type", "page_number", "label", "raw_date", "quote"
+    }
+
+
+def test_evidence_array_is_not_cleaned_as_a_scalar_placeholder():
+    from models import CustomsExtractedFields, LeoDateEvidence
+
+    evidence = LeoDateEvidence(
+        doc_type="FINAL_LEO",
+        page_number=1,
+        label="6.LEO Date",
+        raw_date="08-JUN-26",
+        quote="6.LEO Date 08-JUN-26",
+    )
+    fields = CustomsExtractedFields(leo_evidence=[evidence])
+
+    assert fields.leo_evidence == [evidence]
+
+
+def test_unified_prompt_requests_source_page_and_exact_leo_evidence():
+    prompt = _build_prompt("COMBINED")
+
+    assert "leo_evidence" in prompt
+    assert "exact quote" in prompt.lower()
+    assert "original page number" in prompt.lower()
+    assert "6.LEO Date" in prompt
+    assert "9.LEO" in prompt
 
 
 def test_build_prompt_doc_types():
@@ -72,7 +119,7 @@ def test_extract_with_ai_mock_success(monkeypatch):
         res_gate = extract_with_ai("dummy text", "EGATEPASS", sb_no="1234567")
         assert res_gate.shipper_name == "ACME EXPORTS"
         assert res_gate.invoice_numbers is None
-        assert res_gate.leo_date == "10-Sep-2026"
+        assert res_gate.leo_date is None
         assert res_gate.container_numbers == "TCKU1234567"
 
         # FIRST_COPY should zero out LEO and container info

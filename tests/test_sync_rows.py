@@ -155,17 +155,48 @@ def test_process_documents_empty():
 def test_process_documents_unified(monkeypatch):
     from unittest.mock import MagicMock, patch
 
-    from models import CustomsExtractedFields
+    from models import CustomsExtractedFields, LeoDateEvidence
     from sync import process_documents
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-mock-key")
 
-    mock_trim = MagicMock(return_value=("Sample PDF Text with 1234567", [0]))
+    def mock_trim(pdf_bytes, doc_type):
+        if doc_type == "EGATEPASS":
+            return ("Shipping Bill No: 1234567\n1.Order No / date 1/101 10-Sep-2026", [0])
+        return (
+            "Shipping Bill No: 1234567\n"
+            "5.Submission 06-Sep-2026 6.LEO Date 10-Sep-2026\n9.LEO 10-Sep-2026",
+            [0],
+        )
+
     mock_extract = MagicMock(
         return_value=CustomsExtractedFields(
             shipper_name="ACME EXPORTS",
             invoice_numbers="INV/001",
-            leo_date="10-Sep-2026",
+            leo_date="01-Jan-2000",
+            leo_evidence=[
+                LeoDateEvidence(
+                    doc_type="EGATEPASS",
+                    page_number=1,
+                    label="1.Order No / date",
+                    raw_date="10-Sep-2026",
+                    quote="1.Order No / date 1/101 10-Sep-2026",
+                ),
+                LeoDateEvidence(
+                    doc_type="FINAL_LEO",
+                    page_number=1,
+                    label="6.LEO Date",
+                    raw_date="10-Sep-2026",
+                    quote="5.Submission 06-Sep-2026 6.LEO Date 10-Sep-2026",
+                ),
+                LeoDateEvidence(
+                    doc_type="FINAL_LEO",
+                    page_number=1,
+                    label="9.LEO",
+                    raw_date="10-Sep-2026",
+                    quote="9.LEO 10-Sep-2026",
+                ),
+            ],
             container_numbers="TCKU1234567",
         )
     )
@@ -178,6 +209,8 @@ def test_process_documents_unified(monkeypatch):
         res = process_documents(docs, sb_no="1234567")
         assert res.shipper_name == "ACME EXPORTS"
         assert res.invoice_numbers == "INV/001"
+        assert res.leo_date == "10-Sep-2026"
+        assert len(res.leo_evidence) == 3
         assert res.container_numbers == "TCKU1234567"
 
         # Verify extract_with_ai was called once with doc_type="COMBINED"
@@ -226,17 +259,39 @@ def test_process_documents_first_copy_only_clears_leo_date(monkeypatch):
 def test_process_documents_final_leo_keeps_leo_date_clears_containers(monkeypatch):
     from unittest.mock import MagicMock, patch
 
-    from models import CustomsExtractedFields
+    from models import CustomsExtractedFields, LeoDateEvidence
     from sync import process_documents
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-mock-key")
 
-    mock_trim = MagicMock(return_value=("Sample Final LEO text for SB 7071911", [0]))
+    mock_trim = MagicMock(
+        return_value=(
+            "Shipping Bill No: 7071911\n5.Submission 07-Oct-2026 6.LEO Date 08-Oct-2026\n"
+            "9.LEO 08-Oct-2026",
+            [0],
+        )
+    )
     mock_extract = MagicMock(
         return_value=CustomsExtractedFields(
             shipper_name="ACME EXPORTS",
             invoice_numbers="INV/001",
-            leo_date="08-Oct-2026",
+            leo_date="01-Jan-2000",
+            leo_evidence=[
+                LeoDateEvidence(
+                    doc_type="FINAL_LEO",
+                    page_number=1,
+                    label="6.LEO Date",
+                    raw_date="08-Oct-2026",
+                    quote="5.Submission 07-Oct-2026 6.LEO Date 08-Oct-2026",
+                ),
+                LeoDateEvidence(
+                    doc_type="FINAL_LEO",
+                    page_number=1,
+                    label="9.LEO",
+                    raw_date="08-Oct-2026",
+                    quote="9.LEO 08-Oct-2026",
+                ),
+            ],
             container_numbers="HALLUCINATED_CONTAINER",
         )
     )
@@ -249,6 +304,101 @@ def test_process_documents_final_leo_keeps_leo_date_clears_containers(monkeypatc
         assert res.shipper_name == "ACME EXPORTS"
         assert res.leo_date == "08-Oct-2026"
         assert res.container_numbers is None
+
+
+def test_process_documents_does_not_trust_unverified_ai_leo_date_and_keeps_other_fields(monkeypatch):
+    from unittest.mock import MagicMock, patch
+
+    from models import CustomsExtractedFields
+    from sync import process_documents
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-mock-key")
+
+    mock_trim = MagicMock(
+        return_value=(
+            "Shipping Bill No: 1234567\n"
+            "**5.Submission** 06-JUN-26 15:32 **6.LEO Date.** 08-JUN-26",
+            [0],
+        )
+    )
+    mock_extract = MagicMock(
+        return_value=CustomsExtractedFields(
+            shipper_name="ACME EXPORTS",
+            invoice_numbers="INV/001",
+            leo_date="06-Jun-2026",
+        )
+    )
+
+    with patch("sync.trim_pdf", mock_trim), patch("sync.extract_with_ai", mock_extract):
+        result = process_documents({"finalLeo": ("sb22.pdf", b"pdfbytes")}, sb_no="1234567")
+
+    assert result.shipper_name == "ACME EXPORTS"
+    assert result.invoice_numbers == "INV/001"
+    assert result.leo_date is None
+    assert result.leo_warning
+
+
+def test_process_documents_conflict_refuses_leo_and_keeps_other_fields(monkeypatch, capsys):
+    from unittest.mock import MagicMock, patch
+
+    from models import CustomsExtractedFields, LeoDateEvidence
+    from sync import process_documents
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-mock-key")
+
+    gatepass_text = "Shipping Bill No: 1234567\n1.Order No / date 1/101 08-JUN-26"
+    final_text = (
+        "Shipping Bill No: 1234567\n"
+        "5.Submission 06-JUN-26 6.LEO Date 09-JUN-26\n9.LEO 09-JUN-26"
+    )
+
+    def mock_trim(_pdf_bytes, doc_type):
+        return (gatepass_text if doc_type == "EGATEPASS" else final_text, [0])
+
+    mock_extract = MagicMock(
+        return_value=CustomsExtractedFields(
+            shipper_name="ACME EXPORTS",
+            invoice_numbers="INV/001",
+            leo_evidence=[
+                LeoDateEvidence(
+                    doc_type="EGATEPASS",
+                    page_number=1,
+                    label="1.Order No / date",
+                    raw_date="08-JUN-26",
+                    quote="1.Order No / date 1/101 08-JUN-26",
+                ),
+                LeoDateEvidence(
+                    doc_type="FINAL_LEO",
+                    page_number=1,
+                    label="6.LEO Date",
+                    raw_date="09-JUN-26",
+                    quote="5.Submission 06-JUN-26 6.LEO Date 09-JUN-26",
+                ),
+                LeoDateEvidence(
+                    doc_type="FINAL_LEO",
+                    page_number=1,
+                    label="9.LEO",
+                    raw_date="09-JUN-26",
+                    quote="9.LEO 09-JUN-26",
+                ),
+            ],
+        )
+    )
+
+    with patch("sync.trim_pdf", mock_trim), patch("sync.extract_with_ai", mock_extract):
+        result = process_documents(
+            {
+                "eGatepass": ("sb35.pdf", b"gatepass"),
+                "finalLeo": ("sb22.pdf", b"final"),
+            },
+            sb_no="1234567",
+        )
+
+    assert result.leo_date is None
+    assert "conflicting" in result.leo_warning.lower()
+    assert result.shipper_name == "ACME EXPORTS"
+    assert result.invoice_numbers == "INV/001"
+    assert "LEO date not applied" in capsys.readouterr().out
 
 
 
@@ -324,18 +474,32 @@ def test_models_clean_placeholders_and_formatting():
 def test_process_documents_gatepass_only_clears_invoice_numbers(monkeypatch):
     from unittest.mock import MagicMock, patch
 
-    from models import CustomsExtractedFields
+    from models import CustomsExtractedFields, LeoDateEvidence
     from sync import process_documents
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-mock-key")
 
-    mock_trim = MagicMock(return_value=("Sample Gatepass text for SB 1278254", [0]))
+    mock_trim = MagicMock(
+        return_value=(
+            "Shipping Bill No: 1278254\n1.Order No / date 1/101 28-Apr-2025",
+            [0],
+        )
+    )
     # Mock AI hallucinating an invoice number from a gatepass
     mock_extract = MagicMock(
         return_value=CustomsExtractedFields(
             shipper_name="ACME EXPORTS",
             invoice_numbers="HALLUCINATED_INV",
-            leo_date="28-Apr-2025",
+            leo_date="01-Jan-2000",
+            leo_evidence=[
+                LeoDateEvidence(
+                    doc_type="EGATEPASS",
+                    page_number=1,
+                    label="1.Order No / date",
+                    raw_date="28-Apr-2025",
+                    quote="1.Order No / date 1/101 28-Apr-2025",
+                )
+            ],
             container_numbers="TCKU7809338",
             container_sizes="40",
             customs_seal_numbers="012345",
@@ -438,7 +602,8 @@ def test_gmail_client_fetch_documents_unpadded_base64():
     assert docs["eGatepass"][0] == "1278254_SB35.pdf"
 
 
-def test_cmd_verify_cleans_sb_number(tmp_path):
+def test_cmd_verify_cleans_sb_number(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "fake-unit-test-key")
     from unittest.mock import patch
 
     import openpyxl

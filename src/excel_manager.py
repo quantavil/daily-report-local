@@ -377,7 +377,8 @@ class ExcelManager:
         row_idx: int,
         updates: CustomsExtractedFields,
         col_map: dict[str, int],
-        force_overwrite: bool = False
+        force_overwrite: bool = False,
+        fields: set[str] | None = None,
     ) -> list[str]:
         """
         Safely writes extracted values into cells for row_idx.
@@ -400,7 +401,12 @@ class ExcelManager:
             "customs_seal": updates.customs_seal_numbers,
         }
 
+        if fields is not None and not fields <= field_mapping.keys():
+            raise ValueError("Unknown update fields: " + ", ".join(sorted(fields - field_mapping.keys())))
+
         for field_name, new_val in field_mapping.items():
+            if fields is not None and field_name not in fields:
+                continue
             if not new_val:
                 continue
             col = col_map.get(field_name)

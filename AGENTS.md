@@ -1,6 +1,6 @@
 # AGENTS.md — daily-report-local
 
-Standalone Python CLI (uv + typer + openpyxl + PyMuPDF + Pydantic v2 + OpenAI SDK via OpenRouter).
+Standalone Python CLI (uv + typer + openpyxl + AnyDoc + PyMuPDF + Pydantic v2 + OpenAI SDK via OpenRouter).
 Fills `Daily Working Report.xlsx` in place from ICEGATE Gmail PDFs.
 Package lives flat in `src/`; root `sync.py` is a shim.
 
@@ -11,7 +11,8 @@ uv run --no-sync sync.py --check                         # audit missing fields 
 uv run --no-sync sync.py                                 # full sync: Gmail -> prune -> AI extract -> Excel
 uv run --no-sync sync.py --sb 1278254                    # sync single 7-digit Shipping Bill
 uv run --no-sync sync.py --rows 1349-1351                # sync only specific Excel rows
-uv run --no-sync sync.py --verify-rows 2-20              # read-only audit: re-extract and diff vs filled Excel
+uv run --no-sync sync.py --verify-rows 2-20 --leo-only   # read-only LEO audit with source evidence
+uv run --no-sync sync.py --force --leo-only             # repair all eligible LEO dates, including filled rows
 uv run --no-sync pytest -q                               # unit tests (tests/test_*.py)
 uv run --no-sync ruff check src/ tests/ sync.py          # lint (must be 100% clean)
 ```
@@ -21,9 +22,9 @@ uv run --no-sync ruff check src/ tests/ sync.py          # lint (must be 100% cl
 - **Pure AI Extraction**: 100% powered by OpenRouter (`meta/muse-spark-1.3-contributor`) with strict JSON schema. Zero regex parser fallback.
 - **Shipper Name**: TRUE exporter entity name ONLY (from SB21/SB22 discharge line or Gatepass `4.CHA`). NEVER the CHA company name or `3.Exporter` block.
 - **Invoice**: Primary invoice token from `2.INV NO.` in SB21/SB22. Exclude dates/amounts/currency.
-- **LEO Date**: Gatepass order date first, SB22 second (`6.LEO Date` or `9.LEO` event). Saved as native `datetime.date`.
+- **LEO Date**: Gatepass order date first, SB22 second (`6.LEO Date` or `9.LEO` event). Saved as native `datetime.date`. AI evidence must match the original page, eligible label, and quoted source. Conflicting/unsupported evidence never overwrites LEO.
 - **Containers/Seals/Sizes**: Gatepass `Allowed for Movement` table only. Multi-values joined by `\n`.
-- **Status Column**: All FY sheets use `Status` column (`Success`, `Partial`, `Cancelled`, `Not found`).
+- **Status Column**: All FY sheets use `Status` column (`Success`, `Partial`, `Cancelled`, `Not found`; `Error` for runtime/API/conversion failures).
 
 ## Critical Gotchas
 
@@ -32,7 +33,9 @@ uv run --no-sync ruff check src/ tests/ sync.py          # lint (must be 100% cl
 - **Cancelled Bills**: Rows with `Billing Status == CANCELLED` are stamped as `Cancelled` and skipped to save API quota.
 - **Concurrency**: `cmd_sync` runs parallel fetching via `ThreadPoolExecutor` (max 8 workers) with thread-local Gmail services and an `_auth_lock` protecting token refresh. Excel writes remain sequential.
 - **Backups**: `ExcelManager.save()` writes `.bak-<YYYYMMDD-HHMMSS-ffffff>.xlsx` (newest 5 kept) before overwriting in place.
+- **AnyDoc**: Primary conversion is native Markdown, per retained page with original source page markers. OCR is off (`ocr="reject"`); raise a clear conversion error for pages requiring OCR. No hosted requests or raw-text fallback.
 - **PyMuPDF**: Always keep raw block order; `page.get_text(sort=True)` regresses extraction. Documents must be closed in `finally:` blocks.
-- **Pruning**: `trim_pdf` removes item lists and drawback claims, returning `tuple[str, list[int]]` (combined text and kept page indices).
+- **Pruning**: `trim_pdf` removes item lists and drawback claims, returning `tuple[str, list[int]]` (AnyDoc Markdown with source markers and zero-based kept page indices).
 - **Identity Guard**: `process_documents` verifies the 7-digit SB number is present in PDF text before extraction.
+- **Repair Scope**: `--force` includes complete rows; `--leo-only` restricts data writes to LEO. Status writes obey row/SB filters. Reject unknown sheet names. Never erase an existing date when evidence is missing or rejected.
 - **Secrets**: `.env`, `credentials.json`, `token.json`, and `*.xlsx` are strictly git-ignored. Never commit them.

@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 import threading
@@ -66,11 +67,13 @@ def _clean_json_payload(raw: str) -> str:
 UNIFIED_PROMPT = (
     "You are an expert Indian Customs ICEGATE document parser.\n"
     "Extract the required customs fields strictly from the document text provided below.\n"
-    "If a field is not present or cannot be determined from the documents, set it to null.\n\n"
+    "If a scalar field is not present or cannot be determined, set it to null. "
+    "Always return leo_evidence as an array, empty only when no eligible LEO evidence exists.\n\n"
     "Field Guidelines:\n"
     "- 'shipper_name': TRUE exporter entity name ONLY (found after discharge-port line like 'XXXX (Port Name)' in SB21/SB22, or after/under '4.CHA' in Gatepass). NEVER the CHA company name (e.g. VISHAL LOGISTICS) or '3.Exporter' block. Exclude addresses, roads, PIN, city.\n"
     "- 'invoice_numbers': Primary invoice number from '2.INV NO.' in SB21/SB22 (e.g. NF/156/2025-26, 132/2026, 3878). If multiple invoices, take the first/primary invoice only. Exclude dates, amounts, currency.\n"
-    "- 'leo_date': Gatepass Order Date or LEO Date formatted as DD-Mon-YYYY (from '1.Order No / date' in Gatepass, or '6.LEO Date' in SB22). CRITICAL: If ONLY First Copy (SB21) is available, LEO has NOT yet been granted — you MUST set leo_date to null. NEVER use dates under J.PROCESS DETAILS or Submission/Assessment in SB21.\n"
+    "- 'leo_evidence': For every available eligible source observation, return an object with doc_type, original page number (one-based, page 1 for LEO), label, raw_date, and exact quote. Use Gatepass '1.Order No / date'; for SB22 report both '6.LEO Date' and '9.LEO' when those labels appear. Include explicitly blank eligible fields with raw_date=null and a quote proving the blank; never silently omit a labelled field. The exact quote must contain the label and the associated date token. Do not choose the Submission, Assessment, SB, BRC, or other date from the same row. Do not return First Copy (SB21) evidence.\n"
+    "- LEO output date is derived only after runtime evidence validation; do not return a separate leo_date. If ONLY First Copy (SB21) is available, LEO has NOT yet been granted and leo_evidence must be empty. NEVER use dates under J.PROCESS DETAILS or Submission/Assessment in SB21.\n"
     "- 'container_numbers': Container number(s) from the 'Allowed for Movement' table in Gatepass (e.g. UNSU0088111). Join multiple with newline.\n"
     "- 'container_sizes': ISO container size(s) (20, 40, or 45) from Gatepass 'Allowed for Movement' table. Join multiple with newline.\n"
     "- 'customs_seal_numbers': Customs seal number(s) from Gatepass 'Allowed for Movement' table. Join multiple with newline. NEVER 'Pkg' or label words."
@@ -78,58 +81,56 @@ UNIFIED_PROMPT = (
 
 
 def _build_prompt(doc_type: str = "COMBINED") -> str:
-    """Builds a targeted extraction prompt specialized by ICEGATE document type."""
-    if doc_type == "COMBINED":
-        return UNIFIED_PROMPT
+    """Share extraction rules; single-document callers add source restrictions."""
+    restrictions = {
+        "EGATEPASS": "Customs Gatepass (SB35). invoice_numbers must be null.",
+        "FINAL_LEO": "Final LEO Shipping Bill (SB22). Containers, sizes and seals must be null.",
+        "FIRST_COPY": "First Copy Shipping Bill (SB21). LEO is not granted yet on First Copy; "
+                      "leo_evidence must be empty and containers, sizes and seals must be null.",
+    }
+    restriction = restrictions.get(doc_type)
+    return UNIFIED_PROMPT + (f"\nDocument Type: {restriction}\n" if restriction else "")
 
-    common_prefix = (
-        "You are an expert Indian Customs ICEGATE document parser.\n"
-        "Extract the required customs fields strictly from the document text provided below.\n"
-        "Set any missing or inapplicable fields to null.\n\n"
-    )
 
-    if doc_type == "EGATEPASS":
-        instructions = (
-            "Document Type: Customs Gatepass (SB35)\n"
-            "Target Fields:\n"
-            "- 'shipper_name': TRUE exporter entity name ONLY (found after or under '4.CHA', e.g. NANDIKA FABRICS - NEVER the CHA company name or '3.Exporter' block). Exclude addresses, roads, PIN, city.\n"
-            "- 'leo_date': Gatepass Order Date or LEO Date formatted as DD-Mon-YYYY (look under '1.Order No / date').\n"
-            "- 'container_numbers': Container number(s) from the 'Allowed for Movement' table (e.g. TCKU7809338). Join multiple with newline.\n"
-            "- 'container_sizes': ISO container size(s) (20, 40, or 45). Join multiple with newline.\n"
-            "- 'customs_seal_numbers': Customs seal number(s) between container and size in 'Allowed for Movement' table. Join multiple with newline. NEVER 'Pkg' or label words.\n"
-            "- 'invoice_numbers': null (not present on Gatepass)."
-        )
-    elif doc_type == "FINAL_LEO":
-        instructions = (
-            "Document Type: Final LEO Shipping Bill (SB22)\n"
-            "Target Fields:\n"
-            "- 'shipper_name': TRUE exporter entity name ONLY (the company line right after the discharge-port line like 'QAHMD (PORT HAMAD)' - NEVER the CHA block). Exclude addresses, roads, PIN, city.\n"
-            "- 'invoice_numbers': Primary invoice number from '2.INV NO.' (e.g. NF/156/2025-26, 132/2026, 3878). Exclude dates, amounts and currency.\n"
-            "- 'leo_date': LEO Date formatted as DD-Mon-YYYY (from '6.LEO Date' or '9.LEO').\n"
-            "- 'container_numbers': null\n"
-            "- 'container_sizes': null\n"
-            "- 'customs_seal_numbers': null"
-        )
-    else:  # FIRST_COPY / default
-        instructions = (
-            "Document Type: First Copy Shipping Bill (SB21)\n"
-            "Target Fields:\n"
-            "- 'shipper_name': TRUE exporter entity name ONLY (the company line right after the discharge-port line like 'QAHMD (PORT HAMAD)' - NEVER the CHA block). Exclude addresses, roads, PIN, city.\n"
-            "- 'invoice_numbers': Primary invoice number from '2.INV NO.' (e.g. NF/156/2025-26, 132/2026, 3878). Exclude dates, amounts and currency.\n"
-            "- 'leo_date': null (not granted yet on First Copy)\n"
-            "- 'container_numbers': null\n"
-            "- 'container_sizes': null\n"
-            "- 'customs_seal_numbers': null"
-        )
-
-    return common_prefix + instructions
+def _parse_response(raw: str, sb_no: str) -> CustomsExtractedFields:
+    """Reject bad LEO evidence without deleting independently valid data fields."""
+    try:
+        return CustomsExtractedFields.model_validate_json(raw)
+    except ValidationError:
+        cleaned = _clean_json_payload(raw)
+        try:
+            return CustomsExtractedFields.model_validate_json(cleaned)
+        except ValidationError as exc:
+            if all(error["loc"] and error["loc"][0] == "leo_evidence" for error in exc.errors()):
+                payload = json.loads(cleaned)
+                payload["leo_evidence"] = []
+                result = CustomsExtractedFields.model_validate(payload)
+                result.leo_warning = "AI returned malformed LEO evidence"
+                return result
+            logger.warning("Could not validate AI JSON response for SB %s: %s", sb_no, exc)
+            return CustomsExtractedFields()
 
 
 def get_strict_json_schema() -> dict[str, Any]:
-    """Generates an OpenAI/Meta-compliant strict JSON schema for CustomsExtractedFields."""
+    """Generates a strict AI response schema without runtime-derived LEO fields."""
     schema = CustomsExtractedFields.model_json_schema()
-    schema["required"] = list(schema.get("properties", {}).keys())
-    schema["additionalProperties"] = False
+
+    for field_name in ("leo_date", "leo_warning"):
+        schema.get("properties", {}).pop(field_name, None)
+
+    def make_strict(node: Any) -> None:
+        if isinstance(node, dict):
+            if node.get("type") == "object":
+                properties = node.get("properties", {})
+                node["required"] = list(properties)
+                node["additionalProperties"] = False
+            for value in node.values():
+                make_strict(value)
+        elif isinstance(node, list):
+            for value in node:
+                make_strict(value)
+
+    make_strict(schema)
     return schema
 
 
@@ -189,15 +190,10 @@ def extract_with_ai(
         else None
     )
     raw = str(content) if content is not None else "{}"
-    try:
-        parsed = CustomsExtractedFields.model_validate_json(raw)
-    except ValidationError:
-        try:
-            cleaned = _clean_json_payload(raw)
-            parsed = CustomsExtractedFields.model_validate_json(cleaned)
-        except ValidationError as e:
-            logger.warning(f"Could not validate AI JSON response for SB {sb_no}: {e}")
-            parsed = CustomsExtractedFields()
+    parsed = _parse_response(raw, sb_no)
+
+    # This is runtime-derived only after source and page evidence is validated.
+    parsed.leo_date = None
 
     # Enforce document-type invariants
     if doc_type == "EGATEPASS":

@@ -1,167 +1,100 @@
 # Daily Report Sync
 
-A robust, local Python CLI tool that automates filling missing customs clearance data in `Daily Working Report.xlsx` directly in place.
+Python CLI that fills `Daily Working Report.xlsx` from ICEGATE PDF attachments in Gmail. It uses AnyDoc for native PDF-to-Markdown conversion, PyMuPDF for page selection, OpenRouter for AI extraction, and openpyxl for Excel writes.
 
-It reads shipping bills from Excel, searches ICEGATE emails in Gmail, extracts authoritative shipment data using OpenRouter AI (`meta/muse-spark-1.3-contributor`) with strict JSON schema validation, and writes verified updates back into Excel with automatic timestamped backups.
+## Setup
 
----
+Requires Python 3.14+ and [uv](https://docs.astral.sh/uv/).
 
-## Features
-
-- **In-Place Excel Updates**: Fills missing fields directly in `Daily Working Report.xlsx` without breaking formulas or formatting.
-- **Pure AI Extraction**: Extracts data via OpenRouter using structured JSON schemas and Pydantic validation (zero fragile regex fallbacks).
-- **Intelligent PDF Page Pruning**: Discards Part III item catalogs, drawback claims, and non-movement annexures with PyMuPDF, reducing document tokens by 80–90%.
-- **Concurrent Processing**: Multi-threaded Gmail fetching and AI extraction (`--workers`, default 3) with thread-safe credentials management.
-- **Cancelled Bill Detection**: Automatically identifies cancelled shipping bills, stamps them as `Cancelled`, and skips redundant API calls.
-- **Cell Merging & Empty Value Handling**: Seamlessly handles merged cells (e.g. LCL containers) and case-insensitive empty values (`na`, `n/a`, `-`).
-- **Automated Backups**: Creates microsecond-precision `.bak-<YYYYMMDD-HHMMSS-ffffff>.xlsx` backups before modifying workbooks (auto-prunes to newest 5).
-- **Read-Only Verification Auditing**: Built-in `--verify-rows` command compares fresh extractions against filled Excel rows to validate accuracy.
-
----
-
-## Architecture & Pipeline
-
-```mermaid
-flowchart TD
-    subgraph inputs ["Inputs"]
-        XLSX["Daily Working Report.xlsx<br/>(Target FY Sheet)"]
-        GMAIL["Gmail API<br/>(ICEGATE SB21 / SB22 / SB35 PDFs)"]
-    end
-
-    subgraph pipeline ["Per Shipping Bill"]
-        PRUNE["pdf_processor.trim_pdf<br/>Prune catalogs & annexures (PyMuPDF)"]
-        AI["extractor.extract_with_ai<br/>OpenRouter (meta/muse-spark-1.3-contributor)<br/>Strict JSON Schema + Pydantic"]
-        COMBINE["Field Authority Aggregation<br/>Gatepass (SB35) + SB22 + SB21"]
-    end
-
-    subgraph output ["Workbook Output"]
-        BACKUP["excel_manager.save<br/>Microsecond Backup (.bak-*.xlsx)"]
-        WRITE["excel_manager.apply_updates<br/>Write-back (Real Excel Dates)"]
-    end
-
-    XLSX --> |"Find rows with missing fields"| GMAIL
-    GMAIL --> PRUNE --> AI --> COMBINE --> WRITE
-    WRITE --> BACKUP --> XLSX
-```
-
-### Field Authority Rules
-
-| Field | Primary Source | Extraction Rules |
-| :--- | :--- | :--- |
-| **Shipper Name** | SB21 &rarr; SB22 &rarr; Gatepass (`4.CHA`) | Exporter entity name only. Never the CHA company or `3.Exporter` block. |
-| **Invoice No** | SB21 &rarr; SB22 (`2.INV NO.`) | Primary invoice token (e.g. `NF/156/2025-26`, `132/2026`). Inapplicable on Gatepass. |
-| **LEO Date** | Gatepass order date &rarr; SB22 (`6.LEO Date` / `9.LEO`) | Stored as a native Excel date (`datetime.date`). Inapplicable on SB21. |
-| **Containers** | Gatepass `Allowed for Movement` | Container IDs (e.g. `TCKU7809338`). Multi-values joined by `\n`. |
-| **Container Sizes**| Gatepass `Allowed for Movement` | ISO container sizes (`20`, `40`, `45`). Multi-values joined by `\n`. |
-| **Customs Seals** | Gatepass `Allowed for Movement` | Seal numbers between container and size columns. Multi-values joined by `\n`. |
-| **Status** | Computed row outcome | Stamped in `Status` column: `Success`, `Partial`, `Cancelled`, or `Not found`. |
-
----
-
-## Setup & Prerequisites
-
-### 1. Requirements
-- Python 3.14+
-- [`uv`](https://docs.astral.sh/uv/) package manager
-
-### 2. Install Dependencies
 ```bash
 uv sync
 cp .env.example .env
 ```
 
-### 3. OpenRouter API Key (Required)
-1. Sign up at [openrouter.ai](https://openrouter.ai).
-2. Generate an API key at [openrouter.ai/keys](https://openrouter.ai/keys).
-3. Add the key to `.env`:
-   ```env
-   OPENROUTER_API_KEY=sk-or-v1-...
-   ```
+Set `OPENROUTER_API_KEY` in `.env`. The default model is `meta/muse-spark-1.3-contributor`; `OPENROUTER_MODEL` can override it. Save a Google OAuth Desktop client as `credentials.json` and enable the Gmail API. The first Gmail run opens consent and saves `token.json`. Gmail access is read-only.
 
-### 4. Gmail API Setup (Required for Full Sync)
-1. In [Google Cloud Console](https://console.cloud.google.com/apis/credentials), create a project and enable the **Gmail API**.
-2. Under **OAuth consent screen**, select **External** and add your Gmail account as a test user.
-3. Under **Credentials**, create an **OAuth client ID** of type **Desktop app**.
-4. Download the client secret JSON and save it as `credentials.json` in the project root.
-5. On the first run, the tool will open a browser window for one-time consent, caching the refresh token in `token.json`.
+`.env`, credentials, tokens, and Excel workbooks are ignored by Git.
 
----
+## Workflow
 
-## CLI Usage
+1. Select valid seven-digit Shipping Bill rows from the named sheet. Skip cancelled bills.
+2. Fetch ICEGATE SB35 Gatepass, SB22 Final LEO, and SB21 First Copy attachments.
+3. Select relevant PDF pages with unsorted PyMuPDF text. Convert those pages locally to AnyDoc Markdown, retaining original page numbers.
+4. Make one OpenRouter call per SB using a strict JSON schema. Extraction remains AI-powered; there is no regex parser fallback.
+5. Validate AI-selected LEO evidence against its document, page, label, and exact supporting quotation. Reject unsupported or conflicting dates.
+6. Write selected cells sequentially. Preserve formulas and non-empty cells unless forced. Save a timestamped backup before each workbook save; retain the latest five backups.
 
-Run the sync CLI using `uv run --no-sync sync.py` (or install the entry point `daily-report-sync`):
+**OCR is off.** A selected page that needs OCR produces a clear error; no hosted OCR request or raw-text conversion fallback occurs.
+
+## Field sources
+
+| Field | Source / rule |
+|---|---|
+| Shipper | True exporter from the SB21/SB22 discharge line or Gatepass `4.CHA` context; never the CHA company or `3.Exporter` block |
+| Invoice | Primary token from SB21/SB22 `2.INV NO.`; exclude dates, amounts, and currency |
+| LEO | Gatepass `1.Order No / date` first, SB22 `6.LEO Date` / `9.LEO` second; never SB21 |
+| Containers, sizes, seals | Gatepass `Allowed for Movement` table; multiple values joined by newlines |
+
+LEO is stored as a native Excel date. A date merely present elsewhere in a quote is insufficient: it must belong to the cited LEO/order label. Conflicting accepted dates leave the existing LEO cell unchanged and flag the row.
+
+`Success` describes field completeness after processing, not independent certification of every field. `Partial` includes missing fields or rejected LEO evidence. `Cancelled` rows are skipped. `Not found` indicates no matching documents. `Error` indicates a conversion/API/runtime failure.
+
+## Commands
+
+Default sheet: `FY 2026-27`. An unknown sheet is rejected rather than silently selecting another sheet.
 
 ```bash
-# Audit missing fields across Excel workbook without modifying anything
+# Missing-field audit: no Gmail or AI calls, no workbook changes
 uv run --no-sync sync.py --check
 
-# Audit a specific financial year sheet
-uv run --no-sync sync.py --check --sheet "FY 2024-25"
-
-# Full automated synchronization (Gmail search -> PDF prune -> AI extract -> Excel write)
+# Fill missing fields
 uv run --no-sync sync.py
 
-# Sync a specific financial year sheet
-uv run --no-sync sync.py --sheet "FY 2025-26"
+# Limit by SB, Excel row numbers, or financial year
+uv run --no-sync sync.py --sb 3924868
+uv run --no-sync sync.py --rows 512-514 --sheet "FY 2026-27"
 
-# Sync only a single 7-digit Shipping Bill number
-uv run --no-sync sync.py --sb 1278254
+# Read-only comparison against fresh AI extraction; prints LEO evidence
+uv run --no-sync sync.py --verify-rows 512-514 --leo-only
 
-# Sync specific Excel rows by index or range
-uv run --no-sync sync.py --rows 1349-1351
-uv run --no-sync sync.py --rows 102,105,110
+# Repair only LEO, including rows that are already filled
+uv run --no-sync sync.py --sb 3924868 --force --leo-only
 
-# Read-only audit: re-extract rows from Gmail and diff vs already filled Excel rows
-uv run --no-sync sync.py --verify-rows 2-20 --sheet "FY 2024-25"
-
-# Adjust concurrency worker threads (default 3, max 8)
-uv run --no-sync sync.py --workers 4
-
-# Force overwrite existing non-empty values
-uv run --no-sync sync.py --force
+# Re-extract LEO for every eligible row in the selected sheet
+uv run --no-sync sync.py --sheet "FY 2026-27" --force --leo-only
 ```
 
-### CLI Reference Options
+Audit representative rows before a bulk repair. Auditing consumes Gmail/OpenRouter calls, but never writes the workbook. A matching fresh AI result alone is not independent proof; inspect the cited PDF evidence.
 
-| Option | Flag | Description | Default |
-| :--- | :--- | :--- | :--- |
-| Workbook Path | `--file <path>` | Path to the Excel workbook | `Daily Working Report.xlsx` |
-| Sheet Name | `--sheet <str>` | Target sheet name in the workbook | `FY 2026-27` |
-| Audit Mode | `--check` | Read-only scan of missing fields | `False` |
-| Filter Shipping Bill | `--sb <str>` | Filter for a single 7-digit SB number | `None` |
-| Specific Rows | `--rows <spec>` | Comma-separated or ranged Excel rows (`1349-1351`) | `None` |
-| Verify Diff | `--verify-rows <spec>`| Read-only audit diffing fresh extraction vs filled Excel | `None` |
-| Concurrency | `--workers <int>`| Number of worker threads (capped at 8) | `3` |
-| Force Overwrite | `--force` | Overwrites non-empty cells | `False` |
+| Option | Effect |
+|---|---|
+| `--file PATH` | Workbook path; defaults to `Daily Working Report.xlsx`, overridable by `EXCEL_PATH` |
+| `--sheet NAME` | Exact target sheet |
+| `--check` | Missing-field audit only |
+| `--sb NUMBER` | Select matching seven-digit SB rows |
+| `--rows SPEC` | Row selection, e.g. `513`, `512-514`, or `512,514` |
+| `--verify-rows SPEC` | Read-only re-extraction and comparison |
+| `--leo-only` | Restrict sync writes or audit comparison to LEO |
+| `--force` | Re-extract all selected eligible rows, including complete rows; overwrite selected non-empty fields |
+| `--workers N` | Concurrent fetch/extraction workers; default 3, maximum 8 |
 
----
+`--force` without `--leo-only` may overwrite all six data fields. Row and SB filters apply to status writes too. Skipping filled cells preserves a previous rejection/error status until re-extraction. With `--leo-only`, other data fields remain untouched; overall row status can still be `Partial` if they are missing.
 
-## Testing & Quality Gates
-
-Run the automated test suite and linter:
+## Development
 
 ```bash
-# Run all unit tests (42 unit tests, zero external dependencies)
 uv run --no-sync pytest -q
-
-# Run linter
 uv run --no-sync ruff check src/ tests/ sync.py
 ```
 
----
+The package lives flat in `src/`; root `sync.py` is a CLI shim. Tests use synthetic data and mocked external boundaries. Private PDFs and workbooks do not belong in commits.
 
 ## Troubleshooting
 
-| Issue | Resolution |
-| :--- | :--- |
-| `Excel file not found` | Verify workbook exists in root or configure `EXCEL_PATH` in `.env` / pass `--file`. |
-| `OPENROUTER_API_KEY is missing or empty` | Add your API key to `.env` (`OPENROUTER_API_KEY=sk-or-v1-...`). |
-| Gmail OAuth consent fails | Delete `token.json` and re-run to trigger the browser authorization flow. |
-| `No matching ICEGATE emails found` | Verify the 7-digit SB number exists and matching emails are present in Gmail. |
-| Network timeout / Rate limit | Built-in exponential backoff automatically retries transient 429/500 errors up to 3 times. |
+- **Missing OpenRouter key:** set it privately in `.env`, then rerun.
+- **No matching email:** check the SB and expected ICEGATE subjects. Gmail currently selects the first encountered attachment of each type from up to 20 search results; it does not compare revisions or paginate.
+- **OCR required:** inspect the source PDF; the native conversion path intentionally does not OCR it.
+- **LEO not verified:** inspect the evidence in `--verify-rows`; unsupported evidence or conflicting dates are not written.
+- **Wrong existing date:** normal sync preserves filled cells. Use the audit, then a scoped `--force --leo-only` repair.
 
----
-
-## License
-
-This project is licensed under the [MIT License](LICENSE).
+[MIT License](LICENSE).
