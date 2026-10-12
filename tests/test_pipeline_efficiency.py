@@ -245,6 +245,81 @@ def test_conversion_failure_does_not_cache_partial_non_leo_ai_output(monkeypatch
     assert conversions.count("FINAL_LEO") == 2
 
 
+def test_selected_conversion_failure_is_returned_as_runtime_metadata(monkeypatch):
+    def trim(_raw_bytes, doc_type, *, leo_only=False):
+        if doc_type == "FINAL_LEO":
+            raise PdfConversionError("page needs OCR")
+        return "--- SOURCE PAGE 1 ---\nShipping Bill No: 1234567", [0]
+
+    monkeypatch.setattr("sync.trim_pdf", trim)
+    monkeypatch.setattr(
+        "sync.extract_with_ai",
+        lambda *_args, **_kwargs: CustomsExtractedFields(shipper_name="GATEPASS EXPORTER"),
+    )
+
+    result = process_documents(
+        {
+            "eGatepass": ("gatepass.pdf", b"gatepass"),
+            "finalLeo": ("sb22.pdf", b"broken-sb22"),
+        },
+        sb_no="1234567",
+        fields={"shipper_name"},
+    )
+
+    assert result.shipper_name == "GATEPASS EXPORTER"
+    assert result.conversion_errors == ["finalLeo: page needs OCR"]
+
+
+def test_conversion_errors_are_runtime_only_and_absent_from_ai_schema():
+    from extractor import get_strict_json_schema
+
+    result = CustomsExtractedFields(conversion_errors=["finalLeo: page needs OCR"])
+    schema = get_strict_json_schema()
+
+    assert "conversion_errors" not in result.model_dump(mode="json")
+    assert "conversion_errors" not in schema["properties"]
+    assert "conversion_errors" not in get_strict_json_schema({"inv_no"})["properties"]
+
+
+def test_empty_selected_source_is_reported_as_conversion_failure(monkeypatch):
+    monkeypatch.setattr("sync.trim_pdf", lambda *_args, **_kwargs: ("", []))
+    monkeypatch.setattr(
+        "sync.extract_with_ai",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("AI must not run")),
+    )
+
+    result = process_documents(
+        {"finalLeo": ("sb22.pdf", b"empty")},
+        sb_no="1234567",
+        fields={"inv_no"},
+    )
+
+    assert result.conversion_errors == ["finalLeo: conversion produced no text"]
+
+
+def test_fallback_conversion_errors_are_merged_into_worker_result(monkeypatch):
+    class Gmail:
+        def fetch_documents(self, _sb_no, *, fields=None, include_first_copy=False):
+            if include_first_copy:
+                return {"firstCopy": ("sb21.pdf", b"broken-sb21")}
+            return {"finalLeo": ("sb22.pdf", b"sb22")}
+
+    def trim(raw_bytes, doc_type, *, leo_only=False):
+        if raw_bytes == b"broken-sb21":
+            raise PdfConversionError("page requires OCR")
+        return "--- SOURCE PAGE 1 ---\nShipping Bill No: 1234567", [0]
+
+    monkeypatch.setattr("sync.trim_pdf", trim)
+    monkeypatch.setattr("sync.extract_with_ai", lambda *_args, **_kwargs: CustomsExtractedFields())
+
+    *_prefix, extracted, error = _fetch_and_extract_worker(
+        2, "1234567", ["inv_no"], Gmail()
+    )
+
+    assert error is None
+    assert extracted.conversion_errors == ["firstCopy: page requires OCR"]
+
+
 def test_unreadable_sb22_uses_scoped_sb21_fallback_without_leo_overwrite(monkeypatch):
     class Gmail:
         def __init__(self):

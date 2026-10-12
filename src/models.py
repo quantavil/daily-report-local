@@ -46,6 +46,11 @@ class CustomsExtractedFields(BaseModel):
         exclude=True,
         description="Runtime explanation when LEO evidence cannot be trusted.",
     )
+    conversion_errors: list[str] = Field(
+        default_factory=list,
+        exclude=True,
+        description="Runtime conversion failures for selected source documents.",
+    )
     container_numbers: str | None = Field(
         default=None,
         description="ISO container numbers (e.g. UNSU0088111, TCKU7809338)."

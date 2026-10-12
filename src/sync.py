@@ -271,6 +271,7 @@ def process_documents(
     valid_slots: set[str] = set()
     source_contexts: dict[str, dict[int, str]] = {}
     conversion_failures: set[str] = set()
+    conversion_errors: list[str] = []
     for slot, doc_type, label in priority:
         if slot not in selected_docs:
             continue
@@ -285,7 +286,13 @@ def process_documents(
             )
         except PdfConversionError as exc:
             conversion_failures.add(slot)
+            conversion_errors.append(f"{slot}: {exc}")
             console.print(f"  [yellow]⚠ {filename}: conversion failed; source was skipped ({exc}).[/yellow]")
+            continue
+
+        if not text.strip():
+            conversion_failures.add(slot)
+            conversion_errors.append(f"{slot}: conversion produced no text")
             continue
 
         # Identity guard: skip PDFs that don't mention this shipping bill.
@@ -297,11 +304,9 @@ def process_documents(
             combined_sections.append(f"=== DOCUMENT: {label} ({filename}) ===\n{text.strip()}")
             valid_slots.add(slot)
             source_contexts[slot] = split_source_pages(text)
-        elif slot in ("eGatepass", "finalLeo"):
-            conversion_failures.add(slot)
 
     if not combined_sections:
-        empty = CustomsExtractedFields()
+        empty = CustomsExtractedFields(conversion_errors=conversion_errors)
         if requested & {"leo_date"} and conversion_failures:
             empty.leo_warning = "LEO could not be checked because an eligible source failed conversion."
         return empty
@@ -334,6 +339,7 @@ def process_documents(
         raw_ai_fields = extracted.model_dump(mode="json")
         raw_ai_fields["leo_warning"] = extracted.leo_warning
     raw_ai_warning = raw_ai_fields.get("leo_warning") if raw_ai_fields is not None else None
+    extracted.conversion_errors = conversion_errors
 
     extracted.leo_date = None
     leo_warning = extracted.leo_warning
@@ -727,6 +733,9 @@ def _fetch_and_extract_worker(
                         if warning
                     ]
                     extracted.leo_warning = "; ".join(dict.fromkeys(warnings))
+                extracted.conversion_errors = list(dict.fromkeys(
+                    [*extracted.conversion_errors, *fallback_result.conversion_errors]
+                ))
                 selected_docs["firstCopy"] = first_copy
 
         if not selected_docs:
@@ -885,7 +894,11 @@ def cmd_sync(
                             )
                             remaining = missing_at(row_idx)
                             warning = getattr(extracted, "leo_warning", None)
-                            if warning:
+                            conversion_errors = getattr(extracted, "conversion_errors", [])
+                            if conversion_errors:
+                                status = "Error"
+                                detail = "PDF conversion failed: " + "; ".join(conversion_errors)
+                            elif warning:
                                 status, detail = "Partial", _warning_detail(warning, missing_fields, extracted)
                             elif "leo_date" in missing_fields and not extracted.leo_date:
                                 status, detail = "Partial", "LEO unchanged: no validated date in eligible documents"
