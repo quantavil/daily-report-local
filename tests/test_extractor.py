@@ -189,3 +189,47 @@ def test_get_openai_client_caches_instance(monkeypatch):
         client2 = extractor.get_openai_client()
         assert client1 is client2
         assert mock_openai_cls.call_count == 1
+
+
+def test_clean_json_payload_trailing_comma():
+    from extractor import _clean_json_payload
+    from models import CustomsExtractedFields
+
+    raw = '{"shipper_name": "ACME EXPORTS", "invoice_numbers": "101", "container_numbers": ["TCKU1234567",],}'
+    cleaned = _clean_json_payload(raw)
+    parsed = CustomsExtractedFields.model_validate_json(cleaned)
+    assert parsed.shipper_name == "ACME EXPORTS"
+    assert parsed.invoice_numbers == "101"
+
+
+def test_clean_json_payload_unclosed_think_tag():
+    from extractor import _clean_json_payload
+    from models import CustomsExtractedFields
+
+    raw = '<think>I have analyzed the document and now output JSON: ```json\n{"shipper_name": "UNCLOSED THINK EXPORTS", "invoice_numbers": "INV/555"}\n```'
+    cleaned = _clean_json_payload(raw)
+    parsed = CustomsExtractedFields.model_validate_json(cleaned)
+    assert parsed.shipper_name == "UNCLOSED THINK EXPORTS"
+    assert parsed.invoice_numbers == "INV/555"
+
+
+def test_extract_with_ai_fallback_unparseable_json(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-mock-key")
+
+    mock_resp = MagicMock()
+    mock_resp.choices = [
+        MagicMock(
+            message=MagicMock(
+                content="I'm sorry, I could not extract the data from this document."
+            )
+        )
+    ]
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = mock_resp
+
+    with patch("extractor.get_openai_client", return_value=mock_client):
+        res = extract_with_ai("dummy text", "COMBINED", sb_no="1234567")
+        assert res.shipper_name is None
+        assert res.leo_date is None
+

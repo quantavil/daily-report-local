@@ -395,3 +395,49 @@ def test_create_template_sheet_fallback_source(tmp_path):
     assert mgr.create_template_sheet(name="Template", source="NonExistent") is True
     assert "Template" in mgr.wb.sheetnames
 
+
+def test_resolve_columns_with_trailing_period_and_colon():
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "FY 2026-27"
+    ws.append(["Shipping Bill No.", "Job Dt.", "Remarks:"])
+    mgr = ExcelManager(Path("dummy.xlsx"))
+    mgr.wb = wb
+    col_map = mgr.resolve_columns(ws)
+    assert col_map.get("sb_no") == 1
+    assert col_map.get("job_date") == 2
+    assert col_map.get("remarks") == 3
+
+
+def test_excel_cell_to_str_string_float_literal():
+    # String ending with .0 should be stripped if it represents an integer float
+    assert excel_cell_to_str("1278254.0") == "1278254"
+    assert excel_cell_to_str("  1278254.0  ") == "1278254"
+    # Non-numeric string ending with .0 should remain unchanged
+    assert excel_cell_to_str("INV-101.0") == "INV-101.0"
+
+
+def test_is_empty_cell_nan_and_dot():
+    from excel_manager import is_empty_cell
+
+    assert is_empty_cell("NAN") is True
+    assert is_empty_cell("nan") is True
+    assert is_empty_cell("N.A.") is True
+    assert is_empty_cell(".") is True
+
+
+def test_ensure_status_column_with_trailing_dot(tmp_path):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "FY 2026-27"
+    ws.append(["Shipping Bill No", "Status."])
+    path = tmp_path / "status_dot.xlsx"
+    wb.save(path)
+
+    mgr = ExcelManager(path)
+    mgr.load()
+    idx = mgr.ensure_status_column("FY 2026-27")
+    assert idx == 2
+    assert mgr.wb["FY 2026-27"].max_column == 2
+
+

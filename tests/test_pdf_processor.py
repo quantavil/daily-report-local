@@ -73,3 +73,36 @@ def test_trim_pdf_corrupt_stream():
     text, kept = trim_pdf(b"corrupted non-pdf data", "EGATEPASS")
     assert text == ""
     assert kept == []
+
+
+def test_classify_document_subject_variants():
+    # SB code inside subject text
+    assert classify_document("doc.pdf", text="Electronic Final LEO copy of SB22 for Shipping Bill") == "finalLeo"
+    assert classify_document("doc.pdf", text="ICEGATE SB-35 electronic copy") == "eGatepass"
+    assert classify_document("doc.pdf", text="Electronic LEO copy") == "finalLeo"
+
+
+def test_is_page_relevant_egatepass_container_continuation():
+    # Page 2+ with container numbers but without header keywords
+    assert is_page_relevant(1, "1. TCKU7809338 012345 40 FT", "EGATEPASS") is True
+    assert is_page_relevant(1, "Random terms and conditions with no containers", "EGATEPASS") is False
+
+
+def test_trim_pdf_encrypted():
+    # Create an encrypted PDF
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((50, 50), "Secret SB 1278254")
+    # Save with encryption password 'password123'
+    pdf_bytes = doc.tobytes(encryption=pymupdf.PDF_ENCRYPT_AES_256, user_pw="secret123")
+    doc.close()
+
+    text, kept = trim_pdf(pdf_bytes, "EGATEPASS")
+    # Password protected PDF should return empty without crashing
+    assert text == ""
+    assert kept == []
+
+
+def test_verify_identity_float_string():
+    assert verify_identity("Shipping Bill No: 1278254 Date: 28-Apr-2025", "1278254.0") is True
+

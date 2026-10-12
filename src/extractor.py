@@ -42,20 +42,25 @@ def get_openai_client() -> OpenAI:
 
 def _clean_json_payload(raw: str) -> str:
     """Robustly extracts valid JSON substring from markdown fences, think blocks, or conversational wrapper."""
-    cleaned = raw.strip()
+    cleaned = str(raw or "").strip()
     if not cleaned:
         return "{}"
     # Strip <think>...</think> reasoning blocks if present
     cleaned = re.sub(r"<think>[\s\S]*?</think>", "", cleaned).strip()
+    if "<think>" in cleaned:
+        # Unclosed think tag: discard up to the first markdown fence or opening brace
+        cleaned = re.sub(r"^[\s\S]*?<think>[\s\S]*?(?=(?:```|\{))", "", cleaned).strip()
     # Find markdown JSON fences
     fence_match = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", cleaned, re.IGNORECASE)
     if fence_match:
-        return fence_match.group(1).strip()
-    # Find outermost curly braces
-    obj_match = re.search(r"(\{[\s\S]*\})", cleaned)
-    if obj_match:
-        return obj_match.group(1).strip()
-    return re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned).strip() or "{}"
+        candidate = fence_match.group(1).strip()
+    else:
+        # Find outermost curly braces
+        obj_match = re.search(r"(\{[\s\S]*\})", cleaned)
+        candidate = obj_match.group(1).strip() if obj_match else re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned).strip() or "{}"
+    # Clean trailing commas before closing braces/brackets (invalid in standard JSON)
+    candidate = re.sub(r",\s*([\]}])", r"\1", candidate)
+    return candidate
 
 
 UNIFIED_PROMPT = (
@@ -178,16 +183,21 @@ def extract_with_ai(
             logger.error(f"OpenRouter unexpected error for SB {sb_no} ({doc_type}): {e}")
             raise RuntimeError(f"OpenRouter AI extraction failed for SB {sb_no} ({doc_type}): {e}") from e
 
-    raw = (
-        response.choices[0].message.content or "{}"
+    content = (
+        response.choices[0].message.content
         if (response and response.choices and response.choices[0].message)
-        else "{}"
+        else None
     )
+    raw = str(content) if content is not None else "{}"
     try:
         parsed = CustomsExtractedFields.model_validate_json(raw)
     except ValidationError:
-        cleaned = _clean_json_payload(raw)
-        parsed = CustomsExtractedFields.model_validate_json(cleaned)
+        try:
+            cleaned = _clean_json_payload(raw)
+            parsed = CustomsExtractedFields.model_validate_json(cleaned)
+        except ValidationError as e:
+            logger.warning(f"Could not validate AI JSON response for SB {sb_no}: {e}")
+            parsed = CustomsExtractedFields()
 
     # Enforce document-type invariants
     if doc_type == "EGATEPASS":

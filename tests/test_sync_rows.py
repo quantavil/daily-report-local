@@ -478,3 +478,124 @@ def test_cmd_verify_cleans_sb_number(tmp_path):
         cmd_verify(mgr, "FY 2026-27", MockGmail(), rows={2})
 
     assert queried_sbs == ["1278254"]
+
+
+def test_models_preserves_duplicate_container_sizes_and_seals():
+    from models import CustomsExtractedFields
+
+    fields = CustomsExtractedFields(
+        container_numbers="TCKU7809338\nUNSU0088111",
+        container_sizes="40 FT\n40 FT",
+        customs_seal_numbers=["SEAL01", "SEAL01"],
+    )
+    # Container sizes and seals must NOT collapse across containers
+    assert fields.container_sizes == "40\n40"
+    assert fields.customs_seal_numbers == "SEAL01\nSEAL01"
+
+
+def test_models_handles_empty_list_and_non_string_leo_date():
+    from models import CustomsExtractedFields
+
+    # Empty list should not raise ValidationError
+    fields = CustomsExtractedFields(
+        leo_date=[],
+        shipper_name=[],
+        invoice_numbers=[],
+    )
+    assert fields.leo_date is None
+    assert fields.shipper_name is None
+    assert fields.invoice_numbers is None
+
+    # Single-item list for leo_date
+    fields2 = CustomsExtractedFields(leo_date=["28-Apr-2025"])
+    assert fields2.leo_date == "28-Apr-2025"
+
+
+def test_models_clean_invoices_strips_trailing_hyphen():
+    from models import CustomsExtractedFields
+
+    fields = CustomsExtractedFields(
+        invoice_numbers="INV-101 - Dt. 28/04/2025",
+    )
+    assert fields.invoice_numbers == "INV-101"
+
+
+def test_gmail_client_inline_attachment():
+    import base64
+    from unittest.mock import MagicMock
+
+    from gmail_client import GmailClient
+
+    client = GmailClient()
+    mock_service = MagicMock()
+    client.service = mock_service
+
+    mock_service.users().messages().list().execute.return_value = {
+        "messages": [{"id": "msg_inline"}]
+    }
+
+    dummy_pdf_data = base64.urlsafe_b64encode(b"%PDF-1.4 dummy").decode("ascii")
+    # Inline attachment: data directly in body, no attachmentId
+    mock_service.users().messages().get().execute.return_value = {
+        "payload": {
+            "headers": [{"name": "Subject", "value": "Electronic eGatepass copy of SB for Shipping Bill 1278254"}],
+            "parts": [
+                {
+                    "filename": "1278254_SB35.pdf",
+                    "mimeType": "application/pdf",
+                    "body": {"data": dummy_pdf_data},
+                }
+            ],
+        }
+    }
+
+    docs = client.fetch_documents("1278254")
+    assert "eGatepass" in docs
+    assert docs["eGatepass"][1] == b"%PDF-1.4 dummy"
+
+
+def test_cmd_sync_with_rows_filter_force_on_complete_row(tmp_path, monkeypatch):
+    from unittest.mock import patch
+
+    import openpyxl
+
+    from excel_manager import ExcelManager
+    from models import CustomsExtractedFields
+    from sync import cmd_sync
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-mock-key")
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "FY 2026-27"
+    ws.append(["Shipping Bill No", "Inv No", "LEO Date", "Shipper Name",
+               "Container No.", "Container Size", "Customs Seal Number", "Billing Status"])
+    # Row 2 is already complete
+    ws.append(["1278254", "OLD-INV", "28-Apr-2025", "OLD SHIPPER", "OLDCONT", "20", "OLDSEAL", None])
+    path = tmp_path / "sync_rows_force.xlsx"
+    wb.save(path)
+
+    mgr = ExcelManager(path)
+    mgr.load()
+
+    queried_sbs = []
+
+    class DummyGmail:
+        def authenticate(self):
+            return True
+        def fetch_documents(self, sb):
+            queried_sbs.append(sb)
+            return {"eGatepass": ("gp.pdf", b"dummy")}
+
+    mock_extract = CustomsExtractedFields(
+        shipper_name="FORCED BY ROWS",
+        leo_date="10-Sep-2026",
+    )
+
+    with patch("sync.process_documents", return_value=mock_extract):
+        cmd_sync(mgr, "FY 2026-27", DummyGmail(), workers=1, rows={2}, force=True)
+
+    assert queried_sbs == ["1278254"]
+    target_ws = mgr.wb["FY 2026-27"]
+    assert target_ws.cell(row=2, column=4).value == "FORCED BY ROWS"
+

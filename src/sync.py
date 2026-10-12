@@ -396,13 +396,26 @@ def cmd_sync(
                 console.print(f"[dim]Row {n}: beyond sheet data — skipped.[/dim]")
                 continue
             sb_no = excel_cell_to_str(ws.cell(row=n, column=sb_col).value)
-            if len(re.sub(r"[^0-9]", "", sb_no)) != 7:
+            clean_sb = re.sub(r"[^0-9]", "", sb_no)
+            if len(clean_sb) != 7:
                 console.print(f"[dim]Row {n}: not a 7-digit SB row — skipped.[/dim]")
                 continue
             if billing_col and is_cancelled_value(get_effective_cell_value(ws, n, billing_col, merged_map)):
                 continue
-            excel_mgr.write_status(target_sheet, n, status_col, "Success")
-            outcomes.append((n, sb_no, "Success", "already complete"))
+            if force:
+                sb_date_col = col_map.get("sb_date", 0)
+                raw_sb_date = get_effective_cell_value(ws, n, sb_date_col, merged_map) if sb_date_col else None
+                coerced_date = coerce_excel_date(raw_sb_date)
+                parsed_sb_date = coerced_date.date() if isinstance(coerced_date, datetime) else (coerced_date if isinstance(coerced_date, date) else None)
+                missing_rows.append(ExcelRow(
+                    row_idx=n,
+                    sb_no=clean_sb,
+                    sb_date=parsed_sb_date,
+                    missing_fields=list(REQUIRED_DATA_FIELDS),
+                ))
+            else:
+                excel_mgr.write_status(target_sheet, n, status_col, "Success")
+                outcomes.append((n, sb_no, "Success", "already complete"))
         missing_rows = [r for r in missing_rows if r.row_idx in rows]
     elif sb_filter is not None:
         pass

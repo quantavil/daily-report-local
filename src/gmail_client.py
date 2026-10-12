@@ -132,15 +132,17 @@ class GmailClient:
 
                 body = part.get("body", {})
                 attachment_id = body.get("attachmentId")
-                if not attachment_id:
+                raw_data = body.get("data", "")
+                if not attachment_id and not raw_data:
                     continue
 
                 slot = classify_document(filename, subject)
                 if slot != "UNKNOWN" and slot not in documents:
-                    att_data = service.users().messages().attachments().get(
-                        userId="me", messageId=msg_summary["id"], id=attachment_id
-                    ).execute()
-                    raw_data = att_data.get("data", "")
+                    if not raw_data and attachment_id:
+                        att_data = service.users().messages().attachments().get(
+                            userId="me", messageId=msg_summary["id"], id=attachment_id
+                        ).execute()
+                        raw_data = att_data.get("data", "")
                     if raw_data:
                         padded_data = raw_data + "=" * (-len(raw_data) % 4)
                         raw_bytes = base64.urlsafe_b64decode(padded_data)

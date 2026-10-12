@@ -17,7 +17,7 @@ def is_empty_cell(val: Any) -> bool:
     if val is None:
         return True
     s = str(val).strip().upper()
-    return s in ("", "-", "--", "NA", "N/A", "NONE", "NULL", "NIL", "NOT APPLICABLE")
+    return s in ("", "-", "--", "NA", "N/A", "N.A.", "NONE", "NULL", "NIL", "NOT APPLICABLE", "NAN", ".")
 
 
 def build_merged_cell_map(ws: Worksheet) -> dict[tuple[int, int], tuple[int, int]]:
@@ -113,7 +113,10 @@ def excel_cell_to_str(v: Any) -> str:
         if v != v or v in (float("inf"), float("-inf")):
             return ""
         return str(int(v)) if v.is_integer() else str(v)
-    return str(v).strip()
+    s = str(v).strip()
+    if s.endswith(".0") and s[:-2].replace("-", "").isdigit():
+        return s[:-2]
+    return s
 
 
 def is_cancelled_value(v: Any) -> bool:
@@ -179,7 +182,7 @@ class ExcelManager:
             self.load()
         ws = self.wb[sheet_name]
         headers = [
-            re.sub(r"\s+", " ", str(ws.cell(row=1, column=c).value or "")).strip().lower()
+            re.sub(r"\s+", " ", str(ws.cell(row=1, column=c).value or "")).strip().lower().rstrip(".:")
             for c in range(1, ws.max_column + 1)
         ]
         if "status" in headers:
@@ -277,14 +280,14 @@ class ExcelManager:
         """Maps logical field names to 1-based column indices based on header row."""
         header_row = ws[1]
         headers = [
-            re.sub(r"\s+", " ", str(c.value or "")).strip().lower()
+            re.sub(r"\s+", " ", str(c.value or "")).strip().lower().rstrip(".:")
             for c in header_row
         ]
 
         mapping: dict[str, int] = {}
         for key, aliases in EXCEL_COLUMNS.items():
             for alias in aliases:
-                norm_alias = re.sub(r"\s+", " ", alias).strip().lower()
+                norm_alias = re.sub(r"\s+", " ", alias).strip().lower().rstrip(".:")
                 for idx, h in enumerate(headers):
                     if norm_alias == h:
                         mapping[key] = idx + 1
