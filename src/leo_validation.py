@@ -20,6 +20,16 @@ _NEXT_FIELD_LABEL_RE = re.compile(
     r"(?<![\w])(?:[A-Z]\s+)?\d{1,2}\s*\.\s*[A-Za-z][A-Za-z0-9 /.-]{1,50}",
     re.IGNORECASE,
 )
+_MERGED_ORDER_OFFICER_HEADER_RE = re.compile(
+    r"1\s*\.\s*order\s+no\s*/\s*date\s+2\s*\.\s*name\s+of\s+officer",
+    re.IGNORECASE,
+)
+_ORDER_ID_RE = re.compile(r"\d{1,4}\s*/\s*\d{1,4}")
+_OTHER_DATE_LABEL_RE = re.compile(
+    r"(?<![a-z0-9])(?:\d{1,2}\s*\.\s*)?(?:SB|CIN|Submission|BRC|Assessment)"
+    r"(?:\s+(?:No|Date|DT))?(?![a-z0-9])",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -67,6 +77,61 @@ def _table_cells(line: str) -> list[str]:
     if line.endswith("|"):
         line = line[:-1]
     return [_markdown_normalize(cell) for cell in line.split("|")]
+
+
+def _merged_gatepass_order_id(page_text: str, raw_date: str | None) -> str | None:
+    """Validates the one observed AnyDoc merged order/officer table row."""
+    rows = []
+    for line in page_text.splitlines():
+        if "|" not in line:
+            continue
+        cells = _table_cells(line)
+        header_columns = [
+            index for index, cell in enumerate(cells) if _MERGED_ORDER_OFFICER_HEADER_RE.fullmatch(cell)
+        ]
+        if header_columns:
+            rows.append((cells, header_columns))
+    if len(rows) != 1:
+        return None
+
+    cells, header_columns = rows[0]
+    if len(cells) < 7 or header_columns != [2] or cells[0] != "a leo dtls":
+        return None
+    allowed_columns = {0, 2, 3, 4}
+    if raw_date is not None:
+        allowed_columns.add(6)
+    if any(cell for index, cell in enumerate(cells) if index not in allowed_columns):
+        return None
+
+    if not _ORDER_ID_RE.fullmatch(cells[3]):
+        return None
+
+    officer = cells[4]
+    if not officer or _date_from_token(officer) is not None or _NEXT_FIELD_LABEL_RE.match(officer):
+        return None
+    if _OTHER_DATE_LABEL_RE.search(officer):
+        return None
+
+    if raw_date is None:
+        if cells[6]:
+            return None
+    else:
+        date_cell = cells[6]
+        if date_cell != _markdown_normalize(raw_date):
+            return None
+        if _date_from_token(date_cell) is None:
+            return None
+
+    return cells[3]
+
+
+def _has_merged_gatepass_header(page_text: str) -> bool:
+    return any(
+        _MERGED_ORDER_OFFICER_HEADER_RE.fullmatch(cell)
+        for line in page_text.splitlines()
+        if "|" in line
+        for cell in _table_cells(line)
+    )
 
 
 def _value_segments(page_text: str, doc_type: str, label_key: str) -> list[str]:
@@ -159,9 +224,14 @@ def _validate_observation(
     source = _markdown_normalize(page_text)
     if not quote or quote not in source:
         return None
-    if not _associated_value(page_text, evidence.doc_type, label_key, evidence.raw_date):
+    if evidence.doc_type == "EGATEPASS" and _has_merged_gatepass_header(page_text):
+        source_order_id = _merged_gatepass_order_id(page_text, evidence.raw_date)
+        quote_order_id = _merged_gatepass_order_id(evidence.quote, evidence.raw_date)
+        if source_order_id is None or quote_order_id != source_order_id:
+            return None
+    elif not _associated_value(page_text, evidence.doc_type, label_key, evidence.raw_date):
         return None
-    if not _associated_value(evidence.quote, evidence.doc_type, label_key, evidence.raw_date):
+    elif not _associated_value(evidence.quote, evidence.doc_type, label_key, evidence.raw_date):
         return None
     if evidence.raw_date is None:
         return label_key, None
