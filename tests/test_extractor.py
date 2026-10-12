@@ -78,6 +78,17 @@ def test_unified_prompt_requests_source_page_and_exact_leo_evidence():
     assert "9.LEO" in prompt
 
 
+def test_gatepass_prompt_requires_verbatim_complete_markdown_row_for_leo_quote():
+    prompt = _build_prompt("EGATEPASS")
+
+    assert "full exact original Markdown pipe-delimited row" in prompt
+    assert "preserving empty cells and every | column delimiter" in prompt
+    assert "A LEO DTLS" in prompt
+    assert "order ID, officer name, and date cell" in prompt
+    assert "Do not construct, reorder, or combine" in prompt
+    assert "Do not borrow a nearby date" in prompt
+
+
 def test_build_prompt_doc_types():
     p_gate = _build_prompt("EGATEPASS")
     assert "Customs Gatepass (SB35)" in p_gate
