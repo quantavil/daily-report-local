@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import base64
 import threading
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -9,6 +12,10 @@ from googleapiclient.discovery import build
 
 from config import GMAIL_CREDENTIALS_FILE, GMAIL_MAX_THREADS, GMAIL_TOKEN_FILE
 from pdf_processor import classify_document
+from pipeline_cache import cache_key
+
+if TYPE_CHECKING:
+    from pipeline_cache import PipelineCache
 
 GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 
@@ -18,6 +25,27 @@ SUBJECT_PHRASES = [
     "Electronic First copy of SB for Shipping Bill",
 ]
 
+WORKBOOK_FIELDS = {
+    "inv_no",
+    "shipper_name",
+    "leo_date",
+    "container_no",
+    "container_size",
+    "customs_seal",
+}
+FIRST_COPY_FIELDS = {"inv_no", "shipper_name"}
+MIME_METADATA_DEPTH = 12
+
+
+def _mime_part_metadata_fields(depth: int) -> str:
+    nested_parts = f",parts({_mime_part_metadata_fields(depth - 1)})" if depth else ""
+    return f"filename,mimeType,body(attachmentId,size){nested_parts}"
+
+
+# Gmail's partial-response mask omits bytes while retaining filenames and IDs.
+# Include enough recursive levels for nested multipart/alternative ICEGATE mail.
+METADATA_FIELDS = f"id,internalDate,payload(headers,{_mime_part_metadata_fields(MIME_METADATA_DEPTH)})"
+
 
 class GmailClient:
     _auth_lock = threading.Lock()
@@ -26,9 +54,11 @@ class GmailClient:
         self,
         credentials_file: Path = GMAIL_CREDENTIALS_FILE,
         token_file: Path = GMAIL_TOKEN_FILE,
+        cache: PipelineCache | None = None,
     ):
         self.credentials_file = credentials_file
         self.token_file = token_file
+        self.cache = cache
         self._local = threading.local()
         self._creds = None
 
@@ -87,11 +117,31 @@ class GmailClient:
             self._local.service = build("gmail", "v1", credentials=creds, cache_discovery=False)
             return True
 
-    def fetch_documents(self, sb_no: str) -> dict[str, tuple[str, bytes]]:
+    def fetch_documents(
+        self,
+        sb_no: str,
+        *,
+        fields: set[str] | None = None,
+        include_first_copy: bool = False,
+    ) -> dict[str, tuple[str, bytes]]:
         """
         Searches Gmail for ICEGATE PDF attachments matching a given Shipping Bill number.
-        Returns: { 'eGatepass': (filename, bytes), 'finalLeo': (filename, bytes), 'firstCopy': (filename, bytes) }
+        Returns the newest requested document slots as ``{slot: (filename, bytes)}``.
+        Message metadata is always discovered fresh; attachment bytes may be reused from cache.
         """
+        requested = WORKBOOK_FIELDS if fields is None else WORKBOOK_FIELDS.intersection(fields)
+        wanted_slots = set()
+        if requested & {"leo_date", "container_no", "container_size", "customs_seal", "shipper_name"}:
+            wanted_slots.add("eGatepass")
+        if requested & {"leo_date", "inv_no", "shipper_name"}:
+            wanted_slots.add("finalLeo")
+        needs_first_copy_fallback = bool(requested & FIRST_COPY_FIELDS)
+        if include_first_copy and needs_first_copy_fallback:
+            wanted_slots.add("firstCopy")
+        if not wanted_slots:
+            return {}
+        discover_slots = wanted_slots | ({"firstCopy"} if needs_first_copy_fallback else set())
+
         service = self.service
         if not service:
             if not self.authenticate():
@@ -103,54 +153,148 @@ class GmailClient:
         phrases_or = " OR ".join(f'"{p}"' for p in SUBJECT_PHRASES)
         query = f'"{sb_no}" ({phrases_or})'
 
-        results = service.users().messages().list(userId="me", q=query, maxResults=GMAIL_MAX_THREADS).execute()
-        messages = results.get("messages", [])
-        if not messages:
+        messages_api = service.users().messages()
+        summaries: dict[str, dict[str, Any]] = {}
+        page_token = None
+        while True:
+            list_args = {"userId": "me", "q": query, "maxResults": GMAIL_MAX_THREADS}
+            if page_token:
+                list_args["pageToken"] = page_token
+            result = messages_api.list(**list_args).execute()
+            for summary in result.get("messages", []):
+                if summary.get("id"):
+                    summaries[summary["id"]] = summary
+            page_token = result.get("nextPageToken")
+            if not page_token:
+                break
+        if not summaries:
             return {}
 
-        documents: dict[str, tuple[str, bytes]] = {}
-
-        for msg_summary in messages:
-            msg = service.users().messages().get(userId="me", id=msg_summary["id"]).execute()
-            payload = msg.get("payload", {})
+        candidates: dict[str, list[dict[str, Any]]] = {slot: [] for slot in discover_slots}
+        for message_id in sorted(summaries):
+            metadata = messages_api.get(
+                userId="me",
+                id=message_id,
+                format="full",
+                fields=METADATA_FIELDS,
+            ).execute()
+            payload = metadata.get("payload", {})
             headers = {h["name"].lower(): h["value"] for h in payload.get("headers", [])}
             subject = headers.get("subject", "")
+            try:
+                internal_date = int(metadata.get("internalDate", 0))
+            except (TypeError, ValueError):
+                internal_date = 0
 
-            # Walk all MIME parts recursively — ICEGATE mails are usually
-            # multipart/mixed wrapping multipart/alternative, so PDFs sit
-            # 2-3 levels deep, not at payload.parts top level.
-            def iter_parts(part):
-                yield part
-                for sub in part.get("parts", []) or []:
-                    yield from iter_parts(sub)
-
-            for part in iter_parts(payload):
+            for part in self._iter_parts(payload):
                 filename = part.get("filename", "")
                 mime_type = part.get("mimeType", "")
                 if not filename or not (filename.lower().endswith(".pdf") or "pdf" in mime_type.lower()):
                     continue
-
+                slot = classify_document(filename, subject)
+                if slot not in discover_slots:
+                    continue
                 body = part.get("body", {})
                 attachment_id = body.get("attachmentId")
                 raw_data = body.get("data", "")
-                if not attachment_id and not raw_data:
+                if not attachment_id and not raw_data and not body.get("size"):
                     continue
+                candidates[slot].append(
+                    {
+                        "message_id": message_id,
+                        "internal_date": internal_date,
+                        "subject": subject,
+                        "filename": filename,
+                        "attachment_id": attachment_id,
+                        "raw_data": raw_data,
+                    }
+                )
 
-                slot = classify_document(filename, subject)
-                if slot != "UNKNOWN" and slot not in documents:
-                    if not raw_data and attachment_id:
-                        att_data = service.users().messages().attachments().get(
-                            userId="me", messageId=msg_summary["id"], id=attachment_id
-                        ).execute()
-                        raw_data = att_data.get("data", "")
-                    if raw_data:
-                        padded_data = raw_data + "=" * (-len(raw_data) % 4)
-                        raw_bytes = base64.urlsafe_b64decode(padded_data)
-                    else:
-                        raw_bytes = b""
-                    documents[slot] = (filename, raw_bytes)
-
-                if len(documents) == 3:
-                    return documents
-
+        documents: dict[str, tuple[str, bytes]] = {}
+        download_slots = set(wanted_slots)
+        if needs_first_copy_fallback and not include_first_copy and not candidates["finalLeo"]:
+            download_slots.add("firstCopy")
+        for slot in sorted(download_slots):
+            slot_candidates = candidates[slot]
+            if not slot_candidates:
+                continue
+            newest = min(
+                slot_candidates,
+                key=lambda candidate: (
+                    -candidate["internal_date"],
+                    candidate["message_id"],
+                    candidate["filename"].casefold(),
+                    candidate["attachment_id"] or "",
+                ),
+            )
+            raw_bytes = self._download_candidate(messages_api, newest, slot)
+            if raw_bytes is not None:
+                documents[slot] = (newest["filename"], raw_bytes)
         return documents
+
+    @staticmethod
+    def _iter_parts(part: dict[str, Any]):
+        yield part
+        for subpart in part.get("parts", []) or []:
+            yield from GmailClient._iter_parts(subpart)
+
+    def _download_candidate(
+        self,
+        messages_api: Any,
+        candidate: dict[str, Any],
+        slot: str,
+    ) -> bytes | None:
+        message_id = candidate["message_id"]
+        attachment_id = candidate["attachment_id"]
+        raw_data = candidate["raw_data"]
+
+        if raw_data:
+            return self._decode_data(raw_data)
+
+        if attachment_id:
+            cache_id = cache_key(
+                message_id,
+                attachment_id,
+                slot,
+                candidate["filename"],
+            )
+            cached = None
+            if self.cache is not None:
+                try:
+                    cached = self.cache.get_bytes("gmail_attachments", cache_id)
+                except Exception:
+                    cached = None
+            if cached is not None:
+                return cached
+
+            response = messages_api.attachments().get(
+                userId="me", messageId=message_id, id=attachment_id
+            ).execute()
+            raw_data = response.get("data", "")
+            if not raw_data:
+                return None
+            raw_bytes = self._decode_data(raw_data)
+            if self.cache is not None:
+                try:
+                    self.cache.put_bytes("gmail_attachments", cache_id, raw_bytes)
+                except Exception:
+                    pass
+            return raw_bytes
+
+        # Small inline attachments have body.data instead of an attachment ID.
+        # Retrieve full content only for the already selected message.
+        message = messages_api.get(userId="me", id=message_id, format="full").execute()
+        for part in self._iter_parts(message.get("payload", {})):
+            if part.get("filename") != candidate["filename"]:
+                continue
+            if classify_document(part.get("filename", ""), candidate["subject"]) != slot:
+                continue
+            data = part.get("body", {}).get("data", "")
+            if data:
+                return self._decode_data(data)
+        return None
+
+    @staticmethod
+    def _decode_data(raw_data: str) -> bytes:
+        padded_data = raw_data + "=" * (-len(raw_data) % 4)
+        return base64.urlsafe_b64decode(padded_data)
