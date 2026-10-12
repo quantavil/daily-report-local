@@ -5,7 +5,7 @@ from unittest.mock import patch
 import openpyxl
 
 from excel_manager import ExcelManager
-from models import CustomsExtractedFields
+from models import CustomsExtractedFields, LeoDateEvidence
 from pdf_processor import PdfConversionError
 from sync import cmd_sync
 
@@ -36,7 +36,7 @@ class Gmail:
     def authenticate(self):
         return True
 
-    def fetch_documents(self, sb, *, fields=None, include_first_copy=False):
+    def fetch_documents(self, sb, *, fields=None, include_first_copy=False, first_copy_only=False):
         self.fetched.append(sb)
         return {"finalLeo": ("sb22.pdf", b"external-boundary-placeholder")}
 
@@ -147,9 +147,9 @@ def test_malformed_sb21_fallback_keeps_existing_leo_and_partial_status(tmp_path,
     manager = workbook(tmp_path, [ORIGINAL])
 
     class FallbackGmail(Gmail):
-        def fetch_documents(self, sb, *, fields=None, include_first_copy=False):
+        def fetch_documents(self, sb, *, fields=None, include_first_copy=False, first_copy_only=False):
             self.fetched.append(sb)
-            if include_first_copy:
+            if include_first_copy or first_copy_only:
                 return {"firstCopy": ("sb21.pdf", b"sb21")}
             return {"finalLeo": ("sb22.pdf", b"sb22")}
 
@@ -172,9 +172,9 @@ def test_conversion_error_with_sb21_fallback_writes_invoice_but_marks_error(
     manager = workbook(tmp_path, [ORIGINAL])
 
     class ConversionFailureGmail(Gmail):
-        def fetch_documents(self, sb, *, fields=None, include_first_copy=False):
-            self.fetched.append((sb, include_first_copy))
-            if include_first_copy:
+        def fetch_documents(self, sb, *, fields=None, include_first_copy=False, first_copy_only=False):
+            self.fetched.append((sb, include_first_copy, first_copy_only))
+            if include_first_copy or first_copy_only:
                 return {"firstCopy": ("sb21.pdf", b"sb21")}
             return {
                 "eGatepass": ("gatepass.pdf", b"gatepass"),
@@ -214,6 +214,87 @@ def test_conversion_error_with_sb21_fallback_writes_invoice_but_marks_error(
     assert manager.wb.active.cell(2, 3).value == datetime(2026, 6, 6)
     assert manager.wb.active.cell(2, 4).value == "GATEPASS EXPORTER"
     assert manager.wb.active.cell(2, 9).value == "Error"
+
+
+def _assert_primary_data_persisted_after_fallback_error(tmp_path, monkeypatch, failure, capsys):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "fake-unit-test-key")
+    manager = workbook(tmp_path, [ORIGINAL])
+    calls = []
+
+    class FallbackFailureGmail(Gmail):
+        def fetch_documents(
+            self, sb, *, fields=None, include_first_copy=False, first_copy_only=False
+        ):
+            calls.append((set(fields or ()), include_first_copy, first_copy_only))
+            if first_copy_only:
+                if failure == "gmail":
+                    raise RuntimeError("fallback Gmail unavailable")
+                return {"firstCopy": ("sb21.pdf", b"sb21")}
+            return {
+                "eGatepass": ("gatepass.pdf", b"gatepass"),
+                "finalLeo": ("sb22.pdf", b"sb22"),
+            }
+
+    def trim(raw_bytes, _doc_type, *, leo_only=False):
+        if raw_bytes == b"gatepass":
+            text = (
+                "Shipping Bill No: 3924868\n"
+                "1.Order No / date 1/101 08-JUN-26\n"
+                "4.CHA VALID PRIMARY SHIPPER\nAllowed for Movement"
+            )
+        elif raw_bytes == b"sb22":
+            text = "Shipping Bill No: 3924868\n2.INV NO. INV-SB22"
+        else:
+            text = "Shipping Bill No: 3924868\n2.INV NO. INV-SB21"
+        return f"--- SOURCE PAGE 1 ---\n{text}", [0]
+
+    def extract(text, doc_type="COMBINED", sb_no="", fields=None):
+        if "First Copy Shipping Bill (SB21)" in text and failure == "ai":
+            raise RuntimeError("fallback OpenRouter unavailable")
+        if "First Copy Shipping Bill (SB21)" in text:
+            return CustomsExtractedFields(invoice_numbers="INV-SB21")
+        return CustomsExtractedFields(
+            shipper_name="VALID PRIMARY SHIPPER",
+            leo_evidence=[LeoDateEvidence(
+                doc_type="EGATEPASS",
+                page_number=1,
+                label="1.Order No / date",
+                raw_date="08-JUN-26",
+                quote="1.Order No / date 1/101 08-JUN-26",
+            )],
+        )
+
+    monkeypatch.setattr("sync.trim_pdf", trim)
+    monkeypatch.setattr("sync.extract_with_ai", extract)
+    cmd_sync(manager, "FY 2026-27", FallbackFailureGmail(), force=True, workers=1)
+
+    assert calls == [
+        ({"inv_no", "leo_date", "shipper_name", "container_no", "container_size", "customs_seal"}, False, False),
+        ({"inv_no"}, False, True),
+    ]
+    saved = openpyxl.load_workbook(manager.file_path).active
+    assert saved.cell(2, 2).value == "INV-OLD"
+    assert saved.cell(2, 3).value == datetime(2026, 6, 8)
+    assert saved.cell(2, 4).value == "VALID PRIMARY SHIPPER"
+    assert saved.cell(2, 9).value == "Error"
+    output = capsys.readouterr().out
+    assert f"fallback {'Gmail' if failure == 'gmail' else 'OpenRouter'} unavailable" in output
+
+
+def test_fallback_gmail_exception_persists_valid_primary_fields_as_error(
+    tmp_path, monkeypatch, capsys
+):
+    _assert_primary_data_persisted_after_fallback_error(
+        tmp_path, monkeypatch, "gmail", capsys
+    )
+
+
+def test_fallback_ai_exception_persists_valid_primary_fields_as_error(
+    tmp_path, monkeypatch, capsys
+):
+    _assert_primary_data_persisted_after_fallback_error(
+        tmp_path, monkeypatch, "ai", capsys
+    )
 
 
 def test_invalid_sheet_refuses_fallback_before_writing(tmp_path, monkeypatch):
@@ -262,9 +343,9 @@ def test_audit_uses_scoped_sb21_fallback_without_saving(tmp_path, monkeypatch, c
     calls = []
 
     class FallbackGmail(Gmail):
-        def fetch_documents(self, sb, *, fields=None, include_first_copy=False):
-            self.fetched.append((sb, include_first_copy))
-            if include_first_copy:
+        def fetch_documents(self, sb, *, fields=None, include_first_copy=False, first_copy_only=False):
+            self.fetched.append((sb, include_first_copy, first_copy_only))
+            if include_first_copy or first_copy_only:
                 return {"firstCopy": ("sb21.pdf", b"sb21")}
             return {"finalLeo": ("sb22.pdf", b"sb22")}
 
@@ -279,7 +360,7 @@ def test_audit_uses_scoped_sb21_fallback_without_saving(tmp_path, monkeypatch, c
         cmd_verify(manager, "FY 2026-27", gmail, rows={2})
 
     output = capsys.readouterr().out
-    assert gmail.fetched == [("3924868", False), ("3924868", True)]
+    assert gmail.fetched == [("3924868", False, False), ("3924868", False, True)]
     assert calls[0][1] == {"finalLeo"}
     assert calls[1][0] == {"inv_no"}
     assert calls[1][1] == {"firstCopy"}
@@ -300,7 +381,7 @@ def test_leo_audit_reports_no_eligible_documents_for_selected_fields(
     manager = workbook(tmp_path, [ORIGINAL])
 
     class FirstCopyOnlyGmail(Gmail):
-        def fetch_documents(self, sb, *, fields=None, include_first_copy=False):
+        def fetch_documents(self, sb, *, fields=None, include_first_copy=False, first_copy_only=False):
             return {"firstCopy": ("sb21.pdf", b"sb21")}
 
     cmd_verify(

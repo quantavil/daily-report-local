@@ -299,8 +299,8 @@ def test_empty_selected_source_is_reported_as_conversion_failure(monkeypatch):
 
 def test_fallback_conversion_errors_are_merged_into_worker_result(monkeypatch):
     class Gmail:
-        def fetch_documents(self, _sb_no, *, fields=None, include_first_copy=False):
-            if include_first_copy:
+        def fetch_documents(self, _sb_no, *, fields=None, include_first_copy=False, first_copy_only=False):
+            if include_first_copy or first_copy_only:
                 return {"firstCopy": ("sb21.pdf", b"broken-sb21")}
             return {"finalLeo": ("sb22.pdf", b"sb22")}
 
@@ -325,9 +325,9 @@ def test_unreadable_sb22_uses_scoped_sb21_fallback_without_leo_overwrite(monkeyp
         def __init__(self):
             self.calls = []
 
-        def fetch_documents(self, sb_no, *, fields=None, include_first_copy=False):
-            self.calls.append((sb_no, fields, include_first_copy))
-            if include_first_copy:
+        def fetch_documents(self, sb_no, *, fields=None, include_first_copy=False, first_copy_only=False):
+            self.calls.append((sb_no, fields, include_first_copy, first_copy_only))
+            if include_first_copy or first_copy_only:
                 return {"firstCopy": ("sb21.pdf", b"sb21")}
             return {
                 "eGatepass": ("gatepass.pdf", b"gatepass"),
@@ -386,8 +386,8 @@ def test_unreadable_sb22_uses_scoped_sb21_fallback_without_leo_overwrite(monkeyp
     assert extracted.container_sizes == "40"
     assert extracted.customs_seal_numbers == "SEAL-1"
     assert gmail.calls == [
-        ("1234567", {"inv_no", "leo_date", "shipper_name", "container_no", "container_size", "customs_seal"}, False),
-        ("1234567", {"inv_no", "shipper_name"}, True),
+        ("1234567", {"inv_no", "leo_date", "shipper_name", "container_no", "container_size", "customs_seal"}, False, False),
+        ("1234567", {"inv_no", "shipper_name"}, False, True),
     ]
     assert [fields for _text, fields in ai_calls] == [
         {"inv_no", "leo_date", "shipper_name", "container_no", "container_size", "customs_seal"},
@@ -402,9 +402,9 @@ def test_sb21_only_bill_fetches_scoped_first_copy_after_empty_initial_search(mon
         def __init__(self):
             self.calls = []
 
-        def fetch_documents(self, sb_no, *, fields=None, include_first_copy=False):
-            self.calls.append((sb_no, fields, include_first_copy))
-            return {"firstCopy": ("sb21.pdf", b"sb21")} if include_first_copy else {}
+        def fetch_documents(self, sb_no, *, fields=None, include_first_copy=False, first_copy_only=False):
+            self.calls.append((sb_no, fields, include_first_copy, first_copy_only))
+            return {"firstCopy": ("sb21.pdf", b"sb21")} if include_first_copy or first_copy_only else {}
 
     conversions = []
     ai_calls = []
@@ -431,8 +431,8 @@ def test_sb21_only_bill_fetches_scoped_first_copy_after_empty_initial_search(mon
     assert extracted.shipper_name == "SB21 EXPORTER"
     assert extracted.leo_date is None
     assert gmail.calls == [
-        ("1234567", {"inv_no", "leo_date", "shipper_name"}, False),
-        ("1234567", {"inv_no", "shipper_name"}, True),
+        ("1234567", {"inv_no", "leo_date", "shipper_name"}, False, False),
+        ("1234567", {"inv_no", "shipper_name"}, False, True),
     ]
     assert conversions == ["FIRST_COPY"]
     assert ai_calls == [{"inv_no", "shipper_name"}]
@@ -443,9 +443,9 @@ def test_gatepass_without_sb22_falls_back_only_for_missing_invoice(monkeypatch):
         def __init__(self):
             self.calls = []
 
-        def fetch_documents(self, sb_no, *, fields=None, include_first_copy=False):
-            self.calls.append((set(fields or ()), include_first_copy))
-            if include_first_copy:
+        def fetch_documents(self, sb_no, *, fields=None, include_first_copy=False, first_copy_only=False):
+            self.calls.append((set(fields or ()), include_first_copy, first_copy_only))
+            if include_first_copy or first_copy_only:
                 return {"firstCopy": ("sb21.pdf", b"sb21")}
             return {"eGatepass": ("gatepass.pdf", b"gatepass")}
 
@@ -479,15 +479,15 @@ def test_gatepass_without_sb22_falls_back_only_for_missing_invoice(monkeypatch):
     assert extracted.invoice_numbers == "SB21-INV"
     assert extracted.shipper_name == "GATEPASS EXPORTER"
     assert docs.keys() == {"eGatepass", "firstCopy"}
-    assert gmail.calls == [({"inv_no", "shipper_name"}, False), ({"inv_no"}, True)]
+    assert gmail.calls == [({"inv_no", "shipper_name"}, False, False), ({"inv_no"}, False, True)]
     assert conversions == ["EGATEPASS", "FIRST_COPY"]
     assert ai_calls == [({"inv_no", "shipper_name"}, False), ({"inv_no"}, True)]
 
 
 def test_malformed_sb21_fallback_keeps_warning_and_validated_leo(monkeypatch):
     class Gmail:
-        def fetch_documents(self, sb_no, *, fields=None, include_first_copy=False):
-            if include_first_copy:
+        def fetch_documents(self, sb_no, *, fields=None, include_first_copy=False, first_copy_only=False):
+            if include_first_copy or first_copy_only:
                 return {"firstCopy": ("sb21.pdf", b"sb21")}
             return {
                 "eGatepass": ("gatepass.pdf", b"gatepass"),

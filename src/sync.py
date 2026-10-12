@@ -700,43 +700,46 @@ def _fetch_and_extract_worker(
             # A usable SB22 remains preferred. Fetch/conversion is widened only after its
             # requested invoice/exporter values are absent or the PDF was unusable. This
             # also covers bills where Gmail's initial profile returned no SB21 slot.
-            first_copy = docs.get("firstCopy")
-            if first_copy is None:
-                started = time.perf_counter()
-                fallback_docs = gmail.fetch_documents(
-                    sb_no,
-                    fields=fallback_fields,
-                    include_first_copy=True,
-                )
-                if metrics:
-                    metrics.add_seconds("gmail", time.perf_counter() - started)
-                first_copy = fallback_docs.get("firstCopy")
-            if first_copy is not None:
-                fallback_result = process_documents(
-                    {"firstCopy": first_copy},
-                    sb_no=sb_no,
-                    fields=fallback_fields,
-                    cache=cache,
-                    refresh=refresh,
-                    metrics=metrics,
-                )
-                if "inv_no" in fallback_fields and fallback_result.invoice_numbers:
-                    extracted.invoice_numbers = fallback_result.invoice_numbers
-                if "shipper_name" in fallback_fields and fallback_result.shipper_name:
-                    extracted.shipper_name = fallback_result.shipper_name
-                # Keep the previously source-validated LEO result, while carrying any
-                # fallback extraction failure into the row status.
-                fallback_warning = fallback_result.leo_warning
-                if fallback_warning:
-                    warnings = [
-                        warning for warning in (extracted.leo_warning, fallback_warning)
-                        if warning
-                    ]
-                    extracted.leo_warning = "; ".join(dict.fromkeys(warnings))
-                extracted.conversion_errors = list(dict.fromkeys(
-                    [*extracted.conversion_errors, *fallback_result.conversion_errors]
-                ))
-                selected_docs["firstCopy"] = first_copy
+            try:
+                first_copy = docs.get("firstCopy")
+                if first_copy is None:
+                    started = time.perf_counter()
+                    fallback_docs = gmail.fetch_documents(
+                        sb_no,
+                        fields=fallback_fields,
+                        first_copy_only=True,
+                    )
+                    if metrics:
+                        metrics.add_seconds("gmail", time.perf_counter() - started)
+                    first_copy = fallback_docs.get("firstCopy")
+                if first_copy is not None:
+                    fallback_result = process_documents(
+                        {"firstCopy": first_copy},
+                        sb_no=sb_no,
+                        fields=fallback_fields,
+                        cache=cache,
+                        refresh=refresh,
+                        metrics=metrics,
+                    )
+                    if "inv_no" in fallback_fields and fallback_result.invoice_numbers:
+                        extracted.invoice_numbers = fallback_result.invoice_numbers
+                    if "shipper_name" in fallback_fields and fallback_result.shipper_name:
+                        extracted.shipper_name = fallback_result.shipper_name
+                    # Keep the previously source-validated LEO result, while carrying any
+                    # fallback extraction failure into the row status.
+                    fallback_warning = fallback_result.leo_warning
+                    if fallback_warning:
+                        warnings = [
+                            warning for warning in (extracted.leo_warning, fallback_warning)
+                            if warning
+                        ]
+                        extracted.leo_warning = "; ".join(dict.fromkeys(warnings))
+                    extracted.conversion_errors = list(dict.fromkeys(
+                        [*extracted.conversion_errors, *fallback_result.conversion_errors]
+                    ))
+                    selected_docs["firstCopy"] = first_copy
+            except Exception as e:
+                return (row_idx, sb_no, missing_fields, selected_docs, extracted, str(e))
 
         if not selected_docs:
             return (row_idx, sb_no, missing_fields, {}, None, None)
@@ -880,6 +883,11 @@ def cmd_sync(
                         row_idx, sb_no, missing_fields, docs, extracted, error_str = future.result()
                         if error_str:
                             progress.console.print(f"  [bold red]❌ SB {sb_no} (Row {row_idx}): {error_str}[/bold red]")
+                            if docs and extracted is not None:
+                                excel_mgr.apply_updates(
+                                    target_sheet, row_idx, extracted, col_map,
+                                    force_overwrite=force, fields=selected_fields,
+                                )
                             excel_mgr.write_status(target_sheet, row_idx, status_col, "Error")
                             outcomes.append((row_idx, sb_no, "Error", error_str))
                         elif not docs:

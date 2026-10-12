@@ -203,6 +203,32 @@ def test_first_copy_fallback_is_limited_to_invoice_and_shipper_fields():
     assert leo_client.service.messages_api.attachments_api.calls == []
 
 
+def test_first_copy_only_fallback_discovers_and_downloads_only_sb21():
+    records = {
+        "sb21": _record("Electronic First copy of SB for Shipping Bill", 100, "bill_SB21.pdf", "sb21-att", b"first"),
+        "sb22": _record("Electronic Final LEO copy of SB for Shipping Bill", 200, "bill_SB22.pdf", "sb22-att", b"final"),
+        "gatepass": _record("Electronic eGatepass copy of SB for Shipping Bill", 300, "gatepass.pdf", "gatepass-att", b"gatepass"),
+    }
+    for message_id, record in records.items():
+        record["message"]["id"] = message_id
+    client = _client(records)
+
+    documents = client.fetch_documents(
+        "1278254", fields={"inv_no"}, first_copy_only=True
+    )
+
+    assert documents == {"firstCopy": ("bill_SB21.pdf", b"first")}
+    assert client.service.messages_api.attachments_api.calls == [("sb21", "sb21-att")]
+    assert '"Electronic First copy of SB for Shipping Bill"' in client.service.messages_api.list_calls[0]["q"]
+    assert '"Electronic Final LEO copy of SB for Shipping Bill"' not in client.service.messages_api.list_calls[0]["q"]
+
+    leo_client = _client(records)
+    assert leo_client.fetch_documents(
+        "1278254", fields={"leo_date"}, first_copy_only=True
+    ) == {}
+    assert leo_client.service.messages_api.attachments_api.calls == []
+
+
 def test_first_copy_is_default_fallback_when_no_final_leo_metadata_exists():
     record = _record("First copy", 100, "bill_SB21.pdf", "sb21-att", b"first")
     record["message"]["id"] = "sb21"

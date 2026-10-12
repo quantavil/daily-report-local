@@ -123,24 +123,35 @@ class GmailClient:
         *,
         fields: set[str] | None = None,
         include_first_copy: bool = False,
+        first_copy_only: bool = False,
     ) -> dict[str, tuple[str, bytes]]:
         """
         Searches Gmail for ICEGATE PDF attachments matching a given Shipping Bill number.
         Returns the newest requested document slots as ``{slot: (filename, bytes)}``.
         Message metadata is always discovered fresh; attachment bytes may be reused from cache.
+        ``first_copy_only`` restricts fallback discovery and downloads to SB21.
         """
         requested = WORKBOOK_FIELDS if fields is None else WORKBOOK_FIELDS.intersection(fields)
-        wanted_slots = set()
-        if requested & {"leo_date", "container_no", "container_size", "customs_seal", "shipper_name"}:
-            wanted_slots.add("eGatepass")
-        if requested & {"leo_date", "inv_no", "shipper_name"}:
-            wanted_slots.add("finalLeo")
         needs_first_copy_fallback = bool(requested & FIRST_COPY_FIELDS)
-        if include_first_copy and needs_first_copy_fallback:
+        wanted_slots = set()
+        if first_copy_only:
+            if not needs_first_copy_fallback:
+                return {}
             wanted_slots.add("firstCopy")
+        else:
+            if requested & {"leo_date", "container_no", "container_size", "customs_seal", "shipper_name"}:
+                wanted_slots.add("eGatepass")
+            if requested & {"leo_date", "inv_no", "shipper_name"}:
+                wanted_slots.add("finalLeo")
+            if include_first_copy and needs_first_copy_fallback:
+                wanted_slots.add("firstCopy")
         if not wanted_slots:
             return {}
-        discover_slots = wanted_slots | ({"firstCopy"} if needs_first_copy_fallback else set())
+        discover_slots = (
+            wanted_slots
+            if first_copy_only
+            else wanted_slots | ({"firstCopy"} if needs_first_copy_fallback else set())
+        )
 
         service = self.service
         if not service:
@@ -150,8 +161,11 @@ class GmailClient:
         if not service:
             return {}
 
-        phrases_or = " OR ".join(f'"{p}"' for p in SUBJECT_PHRASES)
-        query = f'"{sb_no}" ({phrases_or})'
+        if first_copy_only:
+            query = f'"{sb_no}" subject:"{SUBJECT_PHRASES[2]}"'
+        else:
+            phrases_or = " OR ".join(f'"{p}"' for p in SUBJECT_PHRASES)
+            query = f'"{sb_no}" ({phrases_or})'
 
         messages_api = service.users().messages()
         summaries: dict[str, dict[str, Any]] = {}
@@ -211,8 +225,8 @@ class GmailClient:
                 )
 
         documents: dict[str, tuple[str, bytes]] = {}
-        download_slots = set(wanted_slots)
-        if needs_first_copy_fallback and not include_first_copy and not candidates["finalLeo"]:
+        download_slots = {"firstCopy"} if first_copy_only else set(wanted_slots)
+        if not first_copy_only and needs_first_copy_fallback and not include_first_copy and not candidates["finalLeo"]:
             download_slots.add("firstCopy")
         for slot in sorted(download_slots):
             slot_candidates = candidates[slot]

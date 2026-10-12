@@ -134,7 +134,7 @@ def test_cmd_sync_stamps_cancelled(tmp_path, monkeypatch):
     class DummyGmail:
         def authenticate(self):
             return True
-        def fetch_documents(self, sb, *, fields=None, include_first_copy=False):
+        def fetch_documents(self, sb, *, fields=None, include_first_copy=False, first_copy_only=False):
             return {}
 
     cmd_sync(mgr, "FY 2026-27", DummyGmail(), workers=3)
@@ -431,7 +431,7 @@ def test_cmd_sync_with_sb_filter(tmp_path, monkeypatch):
     class DummyGmail:
         def authenticate(self):
             return True
-        def fetch_documents(self, sb, *, fields=None, include_first_copy=False):
+        def fetch_documents(self, sb, *, fields=None, include_first_copy=False, first_copy_only=False):
             fetched_sbs.append(sb)
             return {"eGatepass": ("gp.pdf", b"dummy")}
 
@@ -546,7 +546,7 @@ def test_cmd_sync_with_sb_filter_force_on_complete_row(tmp_path, monkeypatch):
     class DummyGmail:
         def authenticate(self):
             return True
-        def fetch_documents(self, sb, *, fields=None, include_first_copy=False):
+        def fetch_documents(self, sb, *, fields=None, include_first_copy=False, first_copy_only=False):
             fetched_sbs.append(sb)
             return {"eGatepass": ("gp.pdf", b"dummy")}
 
@@ -632,7 +632,7 @@ def test_cmd_verify_cleans_sb_number(tmp_path, monkeypatch):
     class MockGmail:
         def authenticate(self):
             return True
-        def fetch_documents(self, sb_no, *, fields=None, include_first_copy=False):
+        def fetch_documents(self, sb_no, *, fields=None, include_first_copy=False, first_copy_only=False):
             queried_sbs.append(sb_no)
             return {"eGatepass": ("gp.pdf", b"pdfbytes")}
 
@@ -751,7 +751,7 @@ def test_cmd_sync_with_rows_filter_force_on_complete_row(tmp_path, monkeypatch):
     class DummyGmail:
         def authenticate(self):
             return True
-        def fetch_documents(self, sb, *, fields=None, include_first_copy=False):
+        def fetch_documents(self, sb, *, fields=None, include_first_copy=False, first_copy_only=False):
             queried_sbs.append(sb)
             return {"eGatepass": ("gp.pdf", b"dummy")}
 
