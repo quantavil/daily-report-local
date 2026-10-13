@@ -1,45 +1,198 @@
 # AGENTS.md — daily-report-local
 
-Standalone Python CLI (uv + typer + openpyxl + AnyDoc + PyMuPDF + Pydantic v2 + OpenAI SDK via OpenRouter).
-Fills `Daily Working Report.xlsx` in place from ICEGATE Gmail PDFs.
-Package lives flat in `src/`; root `sync.py` is a shim.
+## Purpose and status
 
-## Essential Commands
+Fill `Daily Working Report.xlsx` from ICEGATE Gmail PDFs using deterministic local
+parsing. Prefilled Excel rows provide bill identity and processing scope.
+This document describes the implemented local parser and its maintenance contract.
 
-```bash
-uv run --no-sync sync.py --check                         # audit missing fields without modifying workbook
-uv run --no-sync sync.py                                 # full sync: Gmail -> prune -> AI extract -> Excel
-uv run --no-sync sync.py --sb 1278254                    # sync single 7-digit Shipping Bill
-uv run --no-sync sync.py --rows 1349-1351                # sync only specific Excel rows
-uv run --no-sync sync.py --verify-rows 2-20 --leo-only   # read-only LEO audit with source evidence
-uv run --no-sync sync.py --force --leo-only             # repair all eligible LEO dates, including filled rows
-uv run --no-sync pytest -q                               # unit tests (tests/test_*.py)
-uv run --no-sync ruff check src/ tests/ sync.py          # lint (must be 100% clean)
+## Design discipline
+
+- No AI extraction or fallback. Remove AI integrations, prompts, schemas, caches,
+  usage reporting, key requirements, and dependencies when replacing their consumers.
+- One implementation per responsibility. Delete replaced code, dead helpers,
+  obsolete tests, unused dependencies, and outdated documentation. No parallel
+  legacy pipeline or compatibility-only modules. Root `sync.py` is only a launcher.
+- All executable ICEGATE-specific rules belong in `src/daily_report/rules.py`:
+  filename structure, codes, field ownership, pages, labels/header variants,
+  layout relationships, validation, and revision policy.
+- Update this document alongside implemented rules and boundaries. Document the
+  contract here; do not duplicate executable policy across Python modules.
+- Prefer label-anchored, layout-aware parsing. Regex can recognize labels and
+  validate tokens; it must not choose arbitrary nearby names, dates, or numbers.
+- Avoid speculative frameworks, abstractions, and one-class-per-stage structure.
+
+## Authoritative field sources
+
+Expected receiving sequence: SB21 → SB22 → SB35. Process available documents
+independently; missing earlier documents do not block supported later fields.
+
+| Document | Owned fields and eligible source | Original pages |
+| --- | --- | --- |
+| SB21 — First Copy | True exporter from `1. EXPORTER'S NAME & ADDRESS`; primary invoice token from `2. INVOICE No. & Dt.` | 1–2 |
+| SB22 — LEO Copy | LEO from `6. LEO Date` | 1 |
+| SB35 — eGatepass | Movement-table container, size, seal: `11. Container`, `14. Size`, `12. Seal` | All relevant pages and continuations |
+
+- Never substitute the CHA company for the exporter or include address details.
+- Invoice excludes its associated date, amount, and currency.
+- No SB22/Gatepass exporter or invoice fallback; no Gatepass order-date LEO fallback.
+- Never derive LEO from filename document date, SB date, or email receipt time.
+- Before updating part of an existing container triplet, require every retained member
+  to match the selected ordered source records. Conflicts block the whole triplet.
+- Keep container, size, and seal as ordered records, preserving missing positions.
+  Serialize aligned newline-separated Excel columns only at the write boundary.
+  Never independently compact or deduplicate those columns. Verified blank positions
+  may accompany accepted partial lists, but their row remains Partial.
+
+## Identity and Gmail discovery
+
+- Apply row/SB scope before validating row values. Detect cancellation before parsing
+  dates or ports so cancelled data cannot block extraction. Invalid identity values
+  produce row-specific errors and no Gmail calls for that row, without blocking others.
+  Preserve invalid existing LEO text for inspection/forced repair; do not reinterpret
+  it as identity or infer cancellation outside Billing Status.
+- Read SB number, SB date, port, existing values, and any explicitly supplied document
+  date from selected rows. Do not assume a document date column exists.
+- Search only emails from `noreply@icegate.gov.in`; validate sender metadata too.
+  Gmail remains read-only. No fallback across other senders, forwarded mail, Spam, or Trash.
+- Canonical filename:
+  `<SB:7><SB date:DDMMYYYY><port:6><code:SB21|SB22|SB35><document date:DDMMYYYY><time:HHMM>.pdf`.
+- Parse fixed segments; validate dates, time, and code. Reject malformed or mismatching
+  identities rather than guessing components.
+- Generate the longest prefix supported by known row data, e.g.
+  `754640407102026INMBD6SB22`. Append `08102026` only when document date is supplied.
+  Never infer document date/time from receiving sequence.
+- Gmail filename queries do not reliably match partial canonical names. Search the
+  approved sender using the SB number and the generated indexed subject token
+  `No<SB>Dt<DDMMYYYY>`, then apply filename prefixes and full identity validation
+  locally. Without a known SB date, discover within the same sender and filter
+  attachment identity locally; never silently treat an incomplete query as absence.
+  Paginate and inspect attachments; subjects alone never establish a match.
+- Bill identity is SB number + SB date + port. Unknown components remain unknown;
+  conflicts must not be combined automatically. Verify PDF identity before parsing.
+- Use stable message ID + MIME part ID + filename for attachment reuse. Gmail
+  attachment download tokens can rotate between reads; never use them as persistent
+  identity. Missing MIME part IDs receive stable traversal ordinals. Validate retained
+  PDF hashes and any supplied fresh inline bytes before reuse.
+- Refresh Gmail metadata each run. Retain matching revisions; rank canonical revisions
+  by filename document timestamp. Equal timestamps with different content are ambiguous.
+- Failed downloads outside the newest timestamp do not block accepted newest fields,
+  but retention failures still produce Error status. Failed newest candidates block
+  that document type; never silently fall back to older evidence.
+- Missing matching documents remain pending. Do not substitute older revisions for
+  blank, rejected, or failed current evidence without a separately agreed rule.
+
+## SB working records and reuse
+
+```text
+data/7546404/07102026-INMBD6/
+├── manifest.json
+├── pdfs/                      # Original matching PDFs and revisions
+├── processed/
+│   └── <PDF content hash>/
+│       ├── layout.json        # Native blocks, coordinates, original pages
+│       ├── document.md        # Human-readable inspection output
+│       └── parsed.json        # Values, evidence, blanks, rejection reasons
+└── result.json                # Selected validated bill result
 ```
 
-## Ground Truth (Do Not Regress)
+- Preserve original bytes and filenames. Different content with the same filename
+  requires a deterministic collision suffix and manifest provenance, never overwrite.
+- Always isolate bill date/port beneath its SB folder; unknown components use explicit
+  `unknown` segments. Manifest tracks attachment identity, metadata, PDF hashes,
+  selected source hashes, and processing versions; never merge different identities.
+- Reuse unchanged PDFs and processed artifacts. PDF changes invalidate layout/parsing;
+  parser changes invalidate parsing; rules/layout-profile/converter-package changes
+  invalidate layout and dependent parsing. Cached business values are re-derived from
+  native layout for validation; reuse skips downloads/conversion, not source checks.
+- Keep workbook-provided identity, filename metadata, and PDF-derived fields separate
+  with provenance. Flag disagreements rather than silently choosing one.
+- Persist accepted, verified-blank, and rejected outcomes distinctly. Runtime failures
+  are retryable failures, never verified blanks or permanent completed results.
+- Use atomic artifact writes and coordinate workers targeting the same SB folder.
+  Persist document results before Excel updates so interrupted runs can reuse work.
+- Business artifact directories/files use 0700/0600 permissions and remain git-ignored.
 
-- **Pure AI Extraction**: 100% powered by OpenRouter (`meta/muse-spark-1.3-contributor`) with strict JSON schema. Zero regex parser fallback.
-- **Shipper Name**: TRUE exporter entity name ONLY (from SB21/SB22 discharge line or Gatepass `4.CHA`). NEVER the CHA company name or `3.Exporter` block.
-- **Invoice**: Primary invoice token from `2.INV NO.` in SB21/SB22. Exclude dates/amounts/currency.
-- **LEO Date**: Gatepass order date first, SB22 second (`6.LEO Date` or `9.LEO` event). Saved as native `datetime.date`. AI evidence must match the original page, eligible label, and quoted source. Conflicting/unsupported evidence never overwrites LEO.
-- **Containers/Seals/Sizes**: Gatepass `Allowed for Movement` table only. Multi-values joined by `\n`.
-- **Status Column**: All FY sheets use `Status` column (`Success`, `Partial`, `Cancelled`, `Not found`; `Error` for runtime/API/conversion failures).
+## Code boundaries
 
-## Critical Gotchas
+Package: `src/daily_report/`. Split modules further only for demonstrated need.
 
-- **OpenPyXL**: NEVER use `read_only=True` on `openpyxl.load_workbook()` (re-streaming causes multi-minute hangs).
-- **Merged Cells**: Read-only `MergedCell` children (common in LCL containers) are mapped to parent top-left cells via `build_merged_cell_map()`.
-- **Cancelled Bills**: Rows with `Billing Status == CANCELLED` are stamped as `Cancelled` and skipped to save API quota.
-- **Concurrency**: `cmd_sync` runs parallel fetching via `ThreadPoolExecutor` (max 8 workers) with thread-local Gmail services and an `_auth_lock` protecting token refresh. Excel writes remain sequential.
-- **Backups**: `ExcelManager.save()` writes `.bak-<YYYYMMDD-HHMMSS-ffffff>.xlsx` (newest 5 kept) before overwriting in place.
-- **AnyDoc**: Primary conversion is native Markdown, per retained page with original source page markers. OCR is off (`ocr="reject"`); raise a clear conversion error for pages requiring OCR. No hosted requests or raw-text fallback.
-- **PyMuPDF**: Always keep raw block order; `page.get_text(sort=True)` regresses extraction. Documents must be closed in `finally:` blocks.
-- **Pruning**: `trim_pdf` removes item lists and drawback claims, returning `tuple[str, list[int]]` (AnyDoc Markdown with source markers and zero-based kept page indices).
-- **Selective Sources**: SB22 supersedes SB21. Download SB21 only for missing/unusable invoice/exporter information. LEO-only uses Gatepass/SB22 page one and requests only evidence.
-- **LEO Recovery**: Search broadly only for missing LEO document types; validate broadly discovered PDF identity before use. Inspect older distinct versions lazily only after every newest eligible LEO observation is validated blank. Stop on rejection/conflict/conversion failure; never replace newest non-LEO fields with historical values. Print historical filenames for provenance.
-- **Cache**: `.cache/daily-report` (or `DAILY_REPORT_CACHE_DIR`) stores private PDF/text/raw AI artifacts. Revalidate cached LEO evidence against current sources; never trust cached derived dates. Metadata discovery stays fresh. `--refresh` bypasses AI cache; `--no-cache` disables caching; audits always use fresh AI.
-- **AI Cost Controls**: Well-formed full-result observations (including blanks/rejections) can seed LEO-only reuse for identical eligible PDFs after revalidation. Store unchanged source-bound blank/rejected results separately from successes; shared LEO observation aliases contain raw evidence only. Do not cache malformed responses/API/conversion errors as unresolved results. Report provider token/cost usage without estimating missing costs.
-- **Identity Guard**: `process_documents` verifies the 7-digit SB number is present in PDF text before extraction.
-- **Repair Scope**: `--force` includes complete rows; `--leo-only` restricts data writes to LEO. Status writes obey row/SB filters. Reject unknown sheet names. Never erase an existing date when evidence is missing or rejected.
-- **Secrets / Published Report**: Private caches, `.env`, `credentials.json`, `token.json`, workbook backups and other `*.xlsx` files are strictly git-ignored. Never commit them. The user explicitly approved publishing the root `Daily Working Report.xlsx`; it is the sole workbook exception and is intentionally tracked in the public repository.
+| Module | Responsibility and boundary |
+| --- | --- |
+| `cli.py` | Arguments/output; no parsing or workbook mutation logic |
+| `workflow.py` | Coordinate discovery, reuse, parsing, validation, updates; no labels/patterns |
+| `rules.py` | All ICEGATE-specific policy; no Gmail/filesystem/Excel side effects |
+| `models.py` | Typed identities, metadata, evidence, outcomes, container records; no service calls |
+| `gmail.py` | Metadata/downloads; no field extraction or Excel access |
+| `documents.py` | Native layout and generic parsing driven by rules; no Gmail/Excel access |
+| `storage.py` | Artifacts, manifests, reuse, atomic persistence; no field inference/Excel writes |
+| `workbook.py` | Row scope, safe updates, backups/saves; accepts validated results, never parses PDFs |
+
+## Pipeline and validation
+
+Select rows → discover attachments → validate filenames → retain PDFs → select
+revisions/pages → reuse or extract layout → parse/validate → persist results/evidence
+→ build permitted updates → write sequentially → backup/save.
+
+- Check native identity-bearing content across all PDF pages, including pages outside
+  field ownership; contradictory identities reject the document. Preserve original
+  page numbers, native block order, text, and coordinates.
+  Never use `page.get_text(sort=True)`; close PDF documents in `finally` blocks.
+- Reconstruct split neighboring headings before bounding a cell; never allow CHA
+  text to bleed into exporter evidence. Reject address-only exporter candidates and
+  date-only invoice cells. Supported exporter shapes and address exclusions live in rules.
+- Associate identity components with the bill header band or the explicit supported
+  Gatepass secondary-header profile, not an unrelated port/date label elsewhere.
+- Flat and stacked movement records require supported header/continuation geometry.
+  Unsupported continuations reject rather than silently return a truncated list.
+- Parse label/cell/bounded-region relationships. Markdown is for inspection, not
+  the sole source for interpreting table geometry.
+- Native local conversion only; OCR is disabled. Unreadable, encrypted, scanned,
+  and unsupported-layout documents yield explicit unresolved/error outcomes.
+- Each accepted value carries PDF identity/hash, page, eligible label/header,
+  source text, and location. Validate field ownership and source association.
+- Distinguish accepted, verified blank, rejected/ambiguous, missing document, runtime
+  failure. Never guess values merely to complete fields.
+- Use representative anonymized fixtures for layout variants and continuation tables.
+  Test correct source association, not merely successful token recognition.
+
+## Workbook and CLI safeguards
+
+- Preserve supported commands and row/SB/sheet scope. Remove/revise obsolete option
+  semantics explicitly; retain no AI-specific behaviour.
+- `--check`: read-only, no Gmail calls. Verification: read-only fresh local parsing.
+  `--refresh` reparses stored PDFs; `--no-cache` is removed.
+- `--force`: permits validated updates to selected filled fields. `--leo-only`: LEO
+  data writes only. Status writes obey row/SB filters. Reject unknown sheet names.
+- Preserve formulas and existing values on blank/missing/rejected/conflicting/failed
+  evidence. Never erase an existing date. Store LEO as native `datetime.date`.
+- Never use `openpyxl.load_workbook(read_only=True)`.
+- Resolve merged cells to top-left parents; flag conflicting updates to shared parents
+  instead of allowing worker completion order to choose a value. Merged data cells
+  touching cancelled rows are protected even when those rows are selected.
+- Skip `Billing Status == CANCELLED`; stamp selected rows `Cancelled`.
+- Excel writes are sequential. Fetch/parse concurrency is bounded at eight workers;
+  Gmail services are thread-local and authentication refresh is protected.
+- Before overwrite, create `.bak-<YYYYMMDD-HHMMSS-ffffff>.xlsx`; retain newest five.
+- FY sheets use `Status`: `Success`, `Partial`, `Cancelled`, `Not found`, `Error`.
+  Success requires required-field completeness and no unresolved selected-field validation
+  failure. Error means runtime/conversion failure, not simply missing documents.
+
+```bash
+uv run --no-sync sync.py --check
+uv run --no-sync sync.py --sb 7546404
+uv run --no-sync sync.py --rows 1349-1351
+uv run --no-sync sync.py --verify-rows 2-20 --leo-only
+uv run --no-sync pytest -q
+uv run --no-sync ruff check src/ tests/ sync.py
+```
+
+## Privacy and completion
+
+- Git-ignore `data/`, private caches, source PDFs, processed business artifacts, `.env`,
+  `credentials.json`, `token.json`, backups, and all other `*.xlsx` files.
+- Root `Daily Working Report.xlsx` is the sole workbook approved for tracking/publication.
+- Never commit live business documents or secrets. Fixtures must be synthetic/anonymized.
+- Finish replacements by deleting superseded code and updating tests, dependencies,
+  README, and this contract. Run relevant checks before claiming completion.
+- Documentation changes alone do not complete the codebase redesign.

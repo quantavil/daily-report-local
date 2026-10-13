@@ -1,7 +1,7 @@
 [project]
 name = "daily-report-sync"
 version = "0.1.0"
-description = "Add your description here"
+description = "Deterministic ICEGATE PDF parsing and daily workbook sync"
 authors = [
     { name = "quantavil", email = "quantavil@gmail.com" }
 ]
@@ -11,7 +11,6 @@ dependencies = [
     "google-api-python-client>=2.200.0",
     "google-auth-httplib2>=0.4.2",
     "google-auth-oauthlib>=1.4.1",
-    "openai>=3.11.0",
     "openpyxl>=3.1.5",
     "pydantic>=2.0",
     "pymupdf>=1.28.2",
@@ -28,25 +27,15 @@ dev = [
 ]
 
 [project.scripts]
-daily-report-sync = "sync:main"
+daily-report-sync = "daily_report.cli:main"
 
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-package-dir = { "" = "src" }
-py-modules = [
-    "config",
-    "excel_manager",
-    "extractor",
-    "gmail_client",
-    "leo_validation",
-    "models",
-    "pipeline_cache",
-    "pdf_processor",
-    "sync",
-]
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["daily_report*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -60,7 +49,7 @@ omit = ["tests/test_*.py"]
 
 [tool.ruff]
 line-length = 120
-target-version = "py312"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = [

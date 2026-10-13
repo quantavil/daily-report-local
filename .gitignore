@@ -3,6 +3,7 @@
 credentials.json
 token.json
 .cache/
+data/
 *.pdf
 
 # Excel Workbooks & Backups (track only the main report)

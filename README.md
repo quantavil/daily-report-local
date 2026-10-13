@@ -1,127 +1,131 @@
 # Daily Report Sync
 
-Python CLI that fills `Daily Working Report.xlsx` from ICEGATE PDF attachments in Gmail. It uses AnyDoc for native PDF-to-Markdown conversion, PyMuPDF for page selection, OpenRouter for AI extraction, and openpyxl for Excel writes.
+Local Python CLI that fills `Daily Working Report.xlsx` from PDF attachments sent
+by `noreply@icegate.gov.in`. It uses workbook identity, canonical filename metadata,
+native PDF geometry, and deterministic rules. There is no AI extraction or fallback.
 
 ## Setup
 
-Requires Python 3.14+ and [uv](https://docs.astral.sh/uv/).
+Requires Python 3.14+ and uv.
 
 ```bash
 uv sync
 cp .env.example .env
 ```
 
-Set `OPENROUTER_API_KEY` in `.env`. The default model is `meta/muse-spark-1.3-contributor`; `OPENROUTER_MODEL` can override it. Save a Google OAuth Desktop client as `credentials.json` and enable the Gmail API. The first Gmail run opens consent and saves `token.json`. Gmail access is read-only.
+Enable Gmail API and place OAuth Desktop-client credentials in `credentials.json`.
+The first extraction run opens Gmail consent and creates `token.json`; access is
+read-only. No AI API key is needed. Paths can be configured in `.env`.
 
-`.env`, credentials, tokens, caches, workbook backups and other Excel files are ignored by Git. The root `Daily Working Report.xlsx` is intentionally tracked and published with this repository.
+## Authoritative sources
 
-## Daily report
+| Document | Extracted fields | Original pages |
+| --- | --- | --- |
+| SB21 First Copy | Exporter from `1. EXPORTER'S NAME & ADDRESS`; primary invoice from `2. INVOICE No. & Dt.` | 1–2 |
+| SB22 LEO Copy | LEO from `6. LEO Date` | 1 |
+| SB35 eGatepass | Container/size/seal movement records (`11. Container`, `14. Size`, `12. Seal`) | Relevant pages and continuations |
 
-[Download Daily Working Report.xlsx](Daily%20Working%20Report.xlsx). This repository is public, so the committed workbook is publicly accessible. It is a snapshot; local sync changes reach GitHub only after committing and pushing the workbook again.
+The expected sequence is SB21 → SB22 → SB35. Available documents can fill their
+owned fields independently. No field borrows a value from another document type.
+LEO is a native Excel date, never the filename document date. Exporter names exclude
+addresses and CHA companies; invoice values exclude dates, amounts, and currency.
 
-The 12 October 2026 repair validated LEO evidence for 1,728 bills, corrected 42 existing dates and filled 15 blanks. Another 43 bills lack validated LEO evidence; their dates or blanks were preserved. These results concern LEO, not independent validation of every workbook field.
+## Workflow and private records
 
-## Workflow
+1. Select Excel rows and read SB number, SB date, port, and any explicit document date.
+2. Build the longest known filename prefixes. Search fresh Gmail metadata by the
+   SB number and generated `No<SB>Dt<DDMMYYYY>` subject token within the approved
+   sender, then match prefixes and full identity locally. Gmail filename queries do not reliably match partial canonical names.
+3. Retain matching revisions and select the newest document timestamp encoded in
+   the filename. Equal timestamps with different bytes are rejected.
+4. Verify PDF identity and parse label/cell relationships from native text coordinates.
+   Reuse unchanged native layouts and version-matching parsed artifacts. Revalidate cached business
+   values against native layout before accepting them.
+5. Persist source-bound results, then apply permitted workbook updates sequentially.
+   Save a timestamped backup before atomic replacement; retain the newest five.
 
-1. Select valid seven-digit Shipping Bill rows from the named sheet. Skip cancelled bills.
-2. Discover Gmail attachment metadata and choose the newest revision of each needed type. Use SB22 Final LEO and SB35 Gatepass first; fetch SB21 First Copy only as an invoice/exporter fallback. For missing LEO document types, widen the search to attachments anywhere in Gmail, including Spam/Trash. Canonical ICEGATE filenames identify the document type even in forwarded mail; mismatching SB filenames are excluded and broadly discovered PDFs must pass a page-one SB identity check.
-3. Reuse unchanged PDF bytes and native conversions from the private cache. Select pages with unsorted PyMuPDF text and convert them to AnyDoc Markdown with original page numbers. LEO-only retains Gatepass/SB22 page one.
-4. Request only selected fields using a strict JSON schema. Reuse matching cached AI observations; otherwise make one combined OpenRouter call. Well-formed full-extraction LEO observations, including blanks/rejections, can also satisfy a later LEO-only request for the exact same eligible PDFs after revalidation. Missing invoice/exporter information can require one extra scoped SB21 call. Extraction remains AI-powered; there is no regex parser fallback.
-5. Validate fresh and cached AI-selected LEO evidence against the current document, page, label, and exact quotation. Reject unsupported or conflicting dates; never trust a cached derived date alone.
-   If every latest eligible LEO field is explicitly verified blank, lazily inspect older distinct versions using the same AI/evidence validator. Stop at the first validated date or a rejected/conflicting/unreadable version. Historical recovery changes only LEO; invoice/exporter/container values retain their newest-source extraction. The console identifies earlier source filenames used.
-6. Write selected cells sequentially. Preserve formulas and non-empty cells unless forced. Save a timestamped backup before each workbook save; retain the latest five backups.
+```text
+data/7546404/07102026-INMBD6/
+├── manifest.json
+├── pdfs/                      # Originals; name collisions retain both versions
+├── processed/<PDF hash>/
+│   ├── layout.json
+│   ├── document.md
+│   └── parsed.json
+└── result.json
+```
 
-**OCR is off.** A selected page that needs OCR produces a clear error; no hosted OCR request or raw-text conversion fallback occurs.
+Date/port subfolders prevent unrelated bills with the same SB number from sharing
+results. Unknown components have explicit `unknown` folder segments; multiple matching
+identities require resolving the workbook identity. Filenames, hashes, original pages,
+labels, quotations, and coordinates retain provenance. Containers remain aligned
+records, including blank positions, until Excel serialization.
 
-## Field sources
+Unchanged PDFs need no repeated download. Reuse uses stable message/MIME-part
+identity rather than Gmail attachment tokens, which can rotate between reads. Rules, parser, layout profile, and converter
+versions govern reuse. `--refresh` reparses stored PDFs; read-only verification always
+uses fresh local parsing. Corrupt processing artifacts are regenerated. Persistence,
+API, and conversion failures are reported rather than cached as blank fields.
 
-| Field | Source / rule |
-|---|---|
-| Shipper | True exporter from the SB21/SB22 discharge line or Gatepass `4.CHA` context; never the CHA company or `3.Exporter` block |
-| Invoice | Primary token from SB21/SB22 `2.INV NO.`; exclude dates, amounts, and currency |
-| LEO | Gatepass `1.Order No / date` first, SB22 `6.LEO Date` / `9.LEO` second; never SB21 |
-| Containers, sizes, seals | Gatepass `Allowed for Movement` table; multiple values joined by newlines |
-
-LEO is stored as a native Excel date. A date merely present elsewhere in a quote is insufficient: it must belong to the cited LEO/order label. Conflicting accepted dates leave the existing LEO cell unchanged and flag the row.
-
-`Success` describes field completeness after processing, not independent certification of every field. `Partial` includes missing fields or rejected LEO evidence. `Cancelled` rows are skipped. `Not found` indicates no matching documents. `Error` indicates a conversion/API/runtime failure.
+OCR is disabled. Unsupported layouts, missing labels, ambiguous cells, conflicting
+identities, and unreadable PDFs leave affected existing values intact. The parser
+supports tested native label/cell, flat movement-table, and stacked movement-record
+layouts; a new layout needs a rule and an anonymized regression fixture.
 
 ## Commands
 
-Default sheet: `FY 2026-27`. An unknown sheet is rejected rather than silently selecting another sheet.
+Default sheet is `FY 2026-27`; unknown sheets fail explicitly.
 
 ```bash
-# Missing-field audit: no Gmail or AI calls, no workbook changes
+# Read-only missing-field audit; no Gmail access
 uv run --no-sync sync.py --check
 
-# Fill missing fields
+# Fill missing values
 uv run --no-sync sync.py
+uv run --no-sync sync.py --sb 7546404
+uv run --no-sync sync.py --rows 1349-1351 --sheet "FY 2026-27"
 
-# Limit by SB, Excel row numbers, or financial year
-uv run --no-sync sync.py --sb 3924868
-uv run --no-sync sync.py --rows 512-514 --sheet "FY 2026-27"
+# Read-only source comparison with fresh local parsing and evidence
+uv run --no-sync sync.py --verify-rows 2-20 --leo-only
 
-# Read-only comparison against fresh AI extraction; prints LEO evidence
-uv run --no-sync sync.py --verify-rows 512-514 --leo-only
+# Update filled LEO cells only from validated SB22 evidence
+uv run --no-sync sync.py --sb 7546404 --force --leo-only
 
-# Process only LEO, including filled rows; compatible cached evidence can be reused
-uv run --no-sync sync.py --sb 3924868 --force --leo-only
+# Reparse local PDFs; downloads are still reusable
+uv run --no-sync sync.py --sb 7546404 --force --refresh
 
-# Process LEO for every eligible row in the selected sheet
-uv run --no-sync sync.py --sheet "FY 2026-27" --force --leo-only
-
-# Require fresh AI while retaining byte/conversion caches
-uv run --no-sync sync.py --sb 3924868 --force --leo-only --refresh
-
-# Disable all persistent caching for this run
-uv run --no-sync sync.py --sb 3924868 --force --leo-only --no-cache
+# Choose workbook, private records directory, and concurrency
+uv run --no-sync sync.py --file report.xlsx --data-dir /private/icegate --workers 3
 ```
 
-Audit representative rows before a bulk repair. Auditing consumes Gmail/OpenRouter calls, but never writes the workbook. A matching fresh AI result alone is not independent proof; inspect the cited PDF evidence.
+`--force` permits overwriting selected filled fields but never erases values on
+missing/rejected evidence or overwrites formulas. `--leo-only` restricts data writes
+to LEO and discovery to SB22. Full sync retains all matching document types for
+selected bills. Completed rows require force or verification to be reconsidered.
+Retained container columns must match the selected source before filling another
+member of their triplet. Row/SB filters apply before row validation and to status writes too; merged cells crossing unselected rows are
+blocked, and conflicting shared-parent proposals never use completion order to choose.
+Cancelled rows are skipped. Fetch/parse workers are limited to eight; workbook writes
+are sequential. The former AI cache controls and broad/historical source fallback are
+removed; `--no-cache` is not an option.
 
-| Option | Effect |
-|---|---|
-| `--file PATH` | Workbook path; defaults to `Daily Working Report.xlsx`, overridable by `EXCEL_PATH` |
-| `--sheet NAME` | Exact target sheet |
-| `--check` | Missing-field audit only |
-| `--sb NUMBER` | Select matching seven-digit SB rows |
-| `--rows SPEC` | Row selection, e.g. `513`, `512-514`, or `512,514` |
-| `--verify-rows SPEC` | Read-only re-extraction and comparison |
-| `--leo-only` | Restrict sync writes or audit comparison to LEO |
-| `--force` | Include filled rows and allow selected values to be updated; compatible cache results can be reused |
-| `--refresh` | Bypass cached AI observations; retain byte/conversion reuse |
-| `--no-cache` | Disable persistent cache reads and writes |
-| `--workers N` | Concurrent fetch/extraction workers; default 3, maximum 8 |
+Status is `Success`, `Partial`, `Cancelled`, `Not found`, or `Error`. Success means
+required-field completeness with no unresolved selected-field validation; Partial
+includes pending/rejected fields or incomplete container positions. Error means a
+runtime/API/conversion failure. Audit output includes field-specific reasons/evidence.
 
-`--force` without `--leo-only` may overwrite all six data fields. Row and SB filters apply to status writes too. Skipping filled cells preserves a previous rejection/error status until re-extraction. With `--leo-only`, other data fields remain untouched; overall row status can still be `Partial` if they are missing.
-
-## Cache and incremental processing
-
-The default cache is `.cache/daily-report`; set `DAILY_REPORT_CACHE_DIR` to another dedicated private directory. Directories/files are written with permissions 0700/0600. Cached artifacts contain business document data; keep custom cache paths outside Git.
-
-Gmail metadata is searched fresh for each selected bill. Attachment identity reuses PDF downloads; content, profile, model, prompt, schema and processing versions determine conversion/AI reuse. Revised selected documents invalidate extraction. Corrupt entries are misses; storage failures disable caching without failing sync.
-
-Normal sync requests missing fields. When SB21 arrives first, invoice/exporter can be filled provisionally; later SB22/Gatepass supply pending fields. Filled fields are reconsidered with `--force`; `--refresh` additionally requires fresh AI. Read-only verification always uses fresh AI.
-
-Unchanged source-bound blank/rejected LEO observations are cached separately from successful results and are revalidated on every reuse. They cannot supply a date until validation accepts it. Changed PDFs, model/prompt/converter/validator changes, `--refresh`, or `--no-cache` trigger fresh extraction. Malformed AI responses, temporary API failures and conversion failures are not cached as unresolved results. Full-result caches seed narrower LEO reuse after validation; no cached derived date is trusted.
-
-Stage seconds are accumulated across concurrent workers and can exceed wall time. Cache-hit counts cover conversion and AI; attachment hits are not counted. The summary also shows successful API response count, returned input/output tokens, and reported cost in USD with the number of responses supplying cost. Missing cost is not estimated; reported totals can be partial and exclude failures without usage. This phase retains complete LEO page-one context and one combined request for selected fields. A Gmail history cursor, aggressive cropping, lower reasoning settings and a local parser are not implemented.
-
-## Development
+## Development and privacy
 
 ```bash
 uv run --no-sync pytest -q
 uv run --no-sync ruff check src/ tests/ sync.py
 ```
 
-The package lives flat in `src/`; root `sync.py` is a CLI shim. Tests use synthetic data and mocked external boundaries. Only the root daily report workbook is approved for tracking; source PDFs, private extraction artifacts, other workbooks and backups remain local.
+The package is `src/daily_report/`; `sync.py` is its launcher. Rules and module
+boundaries are documented in [AGENTS.md](AGENTS.md). Tests use synthetic workbooks,
+PDFs and layouts, with mocked Gmail boundaries.
 
-## Troubleshooting
-
-- **Missing OpenRouter key:** set it privately in `.env`, then rerun.
-- **No matching email:** check the SB and expected ICEGATE subjects. Gmail checks result pages and selects the newest message revision per requested type.
-- **OCR required:** inspect the source PDF; the native conversion path intentionally does not OCR it.
-- **LEO not verified:** inspect the evidence in `--verify-rows`; unsupported evidence or conflicting dates are not written.
-- **Wrong existing date:** normal sync preserves filled cells. Use the audit, then a scoped `--force --leo-only` repair; add `--refresh` to require fresh AI.
-
-[MIT License](LICENSE).
+Private working records, caches, PDFs, `.env`, credentials, tokens, backups, and other
+workbooks are git-ignored. Only the root [Daily Working Report.xlsx](Daily%20Working%20Report.xlsx)
+is explicitly approved for tracking and public publication. This remains a committed
+snapshot; local workbook changes are not published automatically.
