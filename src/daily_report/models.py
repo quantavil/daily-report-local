@@ -61,8 +61,8 @@ class Evidence(Model):
 
 class FieldResult(Model):
     state: FieldState
-    value: str | date | list[str | None] | None = None
-    value_type: Literal['text', 'date', 'sequence'] = 'text'
+    value: str | date | None = None
+    value_type: Literal['text', 'date', 'records'] = 'text'
     evidence: list[Evidence] = Field(default_factory=list)
     reason: str | None = None
 
@@ -76,11 +76,15 @@ class FieldResult(Model):
 
     @model_validator(mode='after')
     def validate_accepted(self):
-        if self.state == 'accepted' and (self.value is None or not self.evidence):
+        records = self.value_type == 'records'
+        if records and self.value is not None:
+            raise ValueError('Container outcomes reference ordered records, not copied values')
+        if self.state == 'accepted' and ((self.value is None and not records) or not self.evidence):
             raise ValueError('Accepted values require a value and source evidence')
         if self.state != 'accepted' and self.value is not None:
             raise ValueError('Unaccepted results cannot carry writable values')
-        self.value_type = 'date' if isinstance(self.value, date) else 'sequence' if isinstance(self.value, list) else 'text'
+        if not records:
+            self.value_type = 'date' if isinstance(self.value, date) else 'text'
         return self
 
 
@@ -130,12 +134,14 @@ class WorkbookRow(Model):
     identity: BillIdentity
     values: dict[str, str | date | None] = Field(default_factory=dict)
     cancelled: bool = False
+    status: str | None = None
     error: str | None = None
 
 
 class RowUpdate(Model):
     row_idx: int = Field(ge=2)
-    values: dict[str, str | date | list[str | None] | None] = Field(default_factory=dict)
+    values: dict[str, str | date | None] = Field(default_factory=dict)
     containers: list[ContainerRecord] | None = None
+    container_fields: set[str] = Field(default_factory=set)
     status: Literal['Success', 'Partial', 'Cancelled', 'Not found', 'Error']
     detail: str = ''

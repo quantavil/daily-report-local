@@ -115,9 +115,11 @@ class WorkbookStore:
             sb = _sb(value('sb_no'))
             if sb is None or (sb_no is not None and sb != sb_no):
                 continue
+            raw_status = value('status')
+            status = None if raw_status is None else str(raw_status)
             if str(value('billing_status') or '').strip().upper() == rules.EXCEL_CANCELLED_VALUE:
                 rows.append(WorkbookRow(row_idx=row_idx, identity=BillIdentity(sb_no=sb),
-                                        values={}, cancelled=True))
+                                        values={}, cancelled=True, status=status))
                 continue
             try:
                 identity = BillIdentity(sb_no=sb, sb_date=_date(value('sb_date')),
@@ -125,7 +127,7 @@ class WorkbookStore:
                                         document_date=_date(value('document_date')))
             except ValueError as exc:
                 rows.append(WorkbookRow(row_idx=row_idx, identity=BillIdentity(sb_no=sb),
-                                        values={}, error=f'{sheet} row {row_idx}: {exc}'))
+                                        values={}, status=status, error=f'{sheet} row {row_idx}: {exc}'))
                 continue
             values = {}
             for field in rules.DATA_FIELDS:
@@ -139,7 +141,7 @@ class WorkbookStore:
                         values[field] = str(raw)
                 else:
                     values[field] = str(raw) if not isinstance(raw, date) else raw
-            rows.append(WorkbookRow(row_idx=row_idx, identity=identity, values=values))
+            rows.append(WorkbookRow(row_idx=row_idx, identity=identity, values=values, status=status))
         return rows
 
     def apply(self, sheet: str, updates: list[RowUpdate], force: bool = False,
@@ -156,6 +158,11 @@ class WorkbookStore:
         allowed = set(rules.DATA_FIELDS) if fields is None else set(fields)
         if allowed - set(rules.DATA_FIELDS):
             raise ValueError('Unknown writable fields: ' + ', '.join(sorted(allowed - set(rules.DATA_FIELDS))))
+        for update in updates:
+            if update.container_fields - set(rules.CONTAINER_FIELDS):
+                raise ValueError('Unknown container update fields')
+            if update.container_fields and not update.containers:
+                raise ValueError('Container updates require ordered records')
         parents, covered_rows = self._merged(ws)
         cancelled_rows = set()
         if 'billing_status' in columns:
@@ -180,22 +187,16 @@ class WorkbookStore:
             if update.row_idx in cancelled_rows:
                 update.status = 'Cancelled'
                 continue
-            for field, value in update.values.items():
+            values = update.values | {
+                field: '\n'.join(getattr(record, rules.CONTAINER_ATTRS[field]) or ''
+                                 for record in update.containers)
+                for field in update.container_fields
+            }
+            for field, value in values.items():
                 if field not in rules.DATA_FIELDS:
                     raise ValueError(f'Unknown writable field: {field}')
-                if isinstance(value, list) and field not in rules.CONTAINER_ATTRS:
-                    raise ValueError('List values are only supported for container fields')
                 if field not in allowed or _blank(value):
                     continue
-                if update.containers is not None and field in rules.CONTAINER_ATTRS:
-                    value = '\n'.join(getattr(record, rules.CONTAINER_ATTRS[field]) or ''
-                                      for record in update.containers)
-                    if _blank(value):
-                        continue
-                elif isinstance(value, list):
-                    value = '\n'.join(item or '' for item in value)
-                    if _blank(value):
-                        continue
                 if field in rules.EXCEL_DATE_FIELDS:
                     value = _date(value)
                 target = parents.get((update.row_idx, columns[field]), (update.row_idx, columns[field]))
@@ -214,6 +215,20 @@ class WorkbookStore:
                 blocked.add(target)
                 for row in involved:
                     flag(row, f'Conflicting updates for {ws.cell(*target).coordinate}')
+
+        # A blocked member must not leave writable siblings detached from its record.
+        while True:
+            affected_rows = {row for target in blocked for row, field, _ in plans[target]
+                             if field in rules.CONTAINER_ATTRS}
+            siblings = {target for target, proposed in plans.items()
+                        if any(row in affected_rows and field in rules.CONTAINER_ATTRS
+                               for row, field, _ in proposed)} - blocked
+            if not siblings:
+                break
+            blocked.update(siblings)
+            for target in siblings:
+                for row, _, _ in plans[target]:
+                    flag(row, 'Container records unchanged: another member is blocked')
 
         # Status receives the same scope and conflict protection as data cells.
         if 'status' not in columns:

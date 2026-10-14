@@ -221,7 +221,8 @@ def test_container_records_serialize_at_write_boundary_with_missing_positions(tm
 
     path = book(tmp_path)
     store = WorkbookStore(path)
-    change = update(container_no='ignore', container_size='ignore', customs_seal='ignore')
+    change = update()
+    change.container_fields = {'container_no', 'container_size', 'customs_seal'}
     change.containers = [ContainerRecord(number='ABCU1234567', seal='SEAL-A'),
                          ContainerRecord(number='DEFU7654321', size='40')]
     store.apply('FY 2026-27', [change])
@@ -237,7 +238,8 @@ def test_container_records_only_write_validated_selected_columns(tmp_path):
 
     path = book(tmp_path)
     store = WorkbookStore(path)
-    change = update(container_no='validated', container_size='validated')
+    change = update()
+    change.container_fields = {'container_no', 'container_size'}
     change.containers = [ContainerRecord(number='ABCU1234567', size='40', seal='SEAL-A')]
     store.apply('FY 2026-27', [change], fields={'container_no', 'customs_seal'})
     store.save()
@@ -247,24 +249,26 @@ def test_container_records_only_write_validated_selected_columns(tmp_path):
     assert ws['J2'].value is None
 
 
-def test_container_list_values_preserve_missing_positions_without_records(tmp_path):
-    path = book(tmp_path)
+def test_blocked_merged_container_protects_entire_record_triplet(tmp_path):
+    from daily_report.models import ContainerRecord
+    path = book(tmp_path, [[7546404], [7546404]], merges=['H2:H3'])
     store = WorkbookStore(path)
-    change = update(container_no=['ABCU1234567', None, 'DEFU7654321'],
-                    container_size=[None, '40', None], customs_seal=['SEAL-A', None, 'SEAL-B'])
+    change = update()
+    change.containers = [ContainerRecord(number='ABCU1234567', size='20', seal='SEAL1')]
+    change.container_fields = {'container_no', 'container_size', 'customs_seal'}
     store.apply('FY 2026-27', [change])
     store.save()
     ws = openpyxl.load_workbook(path).active
-    assert ws['H2'].value == 'ABCU1234567\n\nDEFU7654321'
-    assert ws['I2'].value == '\n40\n'
-    assert ws['J2'].value == 'SEAL-A\n\nSEAL-B'
+    assert [ws[cell].value for cell in ('H2', 'I2', 'J2')] == [None, None, None]
+    assert change.status == 'Partial'
 
 
-def test_noncontainer_list_values_rejected_before_any_write(tmp_path):
+def test_missing_container_records_rejected_before_any_write(tmp_path):
     path = book(tmp_path)
     store = WorkbookStore(path)
-    change = update(container_no=['ABCU1234567'], inv_no=['INVALID'])
-    with pytest.raises(ValueError, match='List values are only supported for container fields'):
+    change = update(inv_no='NEW')
+    change.container_fields = {'container_no'}
+    with pytest.raises(ValueError, match='Container updates require ordered records'):
         store.apply('FY 2026-27', [change])
     store.save()
     ws = openpyxl.load_workbook(path).active
@@ -350,3 +354,31 @@ def test_invalid_identity_row_error_does_not_block_other_selected_rows(tmp_path)
     assert rows[0].values == {}
     assert rows[1].error is None
     assert rows[1].identity.sb_date == date(2026, 10, 7)
+
+
+@pytest.mark.parametrize('status', ['Success', 'Partial', 'Cancelled'])
+def test_reads_workbook_status_separately_without_inferring_cancellation(tmp_path, status):
+    path = book(tmp_path, [[7546404, date(2026, 10, 7), 'INMBD6', None, None, None,
+                            None, None, None, None, 'ACTIVE', status]])
+    original = path.read_bytes()
+    store = WorkbookStore(path)
+    row = store.rows('FY 2026-27')[0]
+    assert row.status == status
+    assert 'status' not in row.values
+    assert not row.cancelled
+    store.save()
+    assert path.read_bytes() == original
+    assert not list(tmp_path.glob('*.bak-*'))
+
+
+def test_reads_existing_status_for_cancelled_and_identity_error_rows(tmp_path):
+    path = book(tmp_path, [[7546404, 'INVALID', 'BAD PORT', None, None, None,
+                            None, None, None, None, 'CANCELLED', 'Partial'],
+                           [7546405, 'INVALID', 'INMBD6', None, None, None,
+                            None, None, None, None, 'ACTIVE', 'Success']])
+    rows = WorkbookStore(path).rows('FY 2026-27')
+    assert rows[0].status == 'Partial'
+    assert rows[0].cancelled
+    assert rows[1].status == 'Success'
+    assert rows[1].error is not None
+    assert not rows[1].cancelled

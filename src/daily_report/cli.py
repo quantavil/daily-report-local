@@ -11,7 +11,7 @@ from rich.console import Console
 from rich.table import Table
 
 from daily_report.gmail import GmailClient
-from daily_report.rules import DATA_FIELDS, LEO_FIELDS
+from daily_report.rules import CONTAINER_ATTRS, DATA_FIELDS, LEO_FIELDS
 from daily_report.workbook import WorkbookStore
 from daily_report.workflow import execute
 
@@ -65,7 +65,7 @@ def _show_records(records, verify: bool):
             console.print(f'Row {row.row_idx}, SB {row.identity.sb_no}')
             for name, observation in sorted(result.fields.items()):
                 current = row.values.get(name)
-                value = '\n'.join(item or '' for item in observation.value) if isinstance(observation.value, list) else observation.value
+                value = '\n'.join(getattr(record, CONTAINER_ATTRS[name]) or '' for record in result.containers) if observation.value_type == 'records' else observation.value
                 verdict = 'MATCH' if observation.state == 'accepted' and value == current else 'DIFFERENT' if observation.state == 'accepted' else observation.state.upper()
                 console.print(f'  {name}: Excel={current!s}; source={value!s}; {verdict}')
                 for evidence in observation.evidence:
@@ -86,7 +86,7 @@ def cli(
     verify_rows: Annotated[str | None, typer.Option(help='Read-only fresh local parsing of selected rows.')] = None,
     leo_only: Annotated[bool, typer.Option(help='Process SB22 LEO only.')] = False,
     force: Annotated[bool, typer.Option(help='Allow validated updates to filled selected cells.')] = False,
-    refresh: Annotated[bool, typer.Option(help='Reparse stored PDFs instead of reusing parsed results.')] = False,
+    refresh: Annotated[bool, typer.Option(help='Re-extract native layout from stored PDFs.')] = False,
     workers: Annotated[int, typer.Option(min=1, max=8, help='Concurrent bills; Excel writes remain sequential.')] = 3,
     data_dir: Annotated[Path | None, typer.Option(help='Private per-SB storage root.')] = None,
 ):
@@ -110,12 +110,9 @@ def cli(
         if not selected:
             console.print('No matching workbook rows.')
             return
-        if not any(not row.cancelled and not row.error and (verify_rows is not None or force or any(not row.values.get(name) for name in fields)) for row in selected):
-            # execute still stamps selected cancelled rows without accessing Gmail.
-            console.print('No selected data fields need extraction.')
         gmail = GmailClient(Path(os.getenv('GMAIL_CREDENTIALS_FILE', 'credentials.json')),
                             Path(os.getenv('GMAIL_TOKEN_FILE', 'token.json')))
-        records = execute(workbook, sheet, gmail, storage_root, row_numbers=row_numbers, sb_no=sb,
+        records = execute(workbook, sheet, gmail, storage_root, selected=selected,
                           force=force, leo_only=leo_only, workers=workers, refresh=refresh,
                           verify=verify_rows is not None)
         _show_records(records, verify_rows is not None)

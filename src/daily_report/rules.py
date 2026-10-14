@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import date, datetime
 
-from daily_report.models import BillIdentity, DocumentMetadata
+from daily_report.models import BillIdentity, BillResult, DocumentMetadata
 
 SENDER = "noreply@icegate.gov.in"
-RULES_VERSION = "4"
-PARSER_VERSION = "4"
+GMAIL_WINDOW_DAYS = 30
+BUSINESS_TIMEZONE = "Asia/Kolkata"
+RULES_VERSION = "5"
+PARSER_VERSION = "5"
 LAYOUT_VERSION = "2"
 FIELD_DOCUMENTS = {
     "shipper_name": "SB21",
@@ -22,11 +24,7 @@ FIELD_DOCUMENTS = {
 DATA_FIELDS = tuple(FIELD_DOCUMENTS)
 PAGES = {"SB21": (1, 2), "SB22": (1,), "SB35": None}
 EXCEL_COLUMNS = {
-    "sl_no": ["Sl No", "S.No", "Sl.No"],
-    "fy": ["Financial Year", "FY"],
     "port_code": ["Port Code / ICD Code", "Port Code", "ICD Code"],
-    "job_no": ["Job No", "Job No."],
-    "job_date": ["Job Date", "Job Dt"],
     "inv_no": ["Inv No", "Invoice No", "Invoice Number", "Inv No.", "Invoice No."],
     "sb_no": ["Shipping Bill No", "Shipping Bill Number", "SB No", "SB Number"],
     "sb_date": ["Shipping Bill Date", "SB Date", "Shipping Bill Dt", "SB Dt"],
@@ -43,7 +41,6 @@ EXCEL_COLUMNS = {
         "Seal Number",
         "Seal No",
     ],
-    "remarks": ["Remarks", "Remarks / Status", "Sync Status"],
     "billing_status": ["Billing Status", "Billing status", "Billing"],
     "status": ["Status"],
 }
@@ -107,11 +104,53 @@ def filename_prefix(identity: BillIdentity, code: str) -> str:
     return prefix
 
 
+def batch_name(identity: BillIdentity) -> str:
+    date_part = identity.sb_date.strftime('%d%m%Y') if identity.sb_date else 'unknown'
+    return identity.sb_no + date_part + (identity.port_code or 'unknown')
+
+
+def storage_year(identity: BillIdentity) -> str:
+    return str(identity.sb_date.year) if identity.sb_date else 'unknown'
+
+
 def gmail_identity_terms(identity: BillIdentity) -> tuple[str, ...]:
     """Exact indexed identity tokens; Gmail doesn't search filename prefixes."""
     if identity.sb_date is None:
         return ()
     return (identity.sb_no, f"No{identity.sb_no}Dt{identity.sb_date:%d%m%Y}")
+
+
+def gmail_window_open(identity: BillIdentity, today: date) -> bool:
+    return identity.sb_date is None or (today - identity.sb_date).days < GMAIL_WINDOW_DAYS
+
+
+def result_is_success(result: BillResult | None) -> bool:
+    if result is None or result.errors or result.issues:
+        return False
+    if any(name not in result.fields or result.fields[name].state != 'accepted' for name in DATA_FIELDS):
+        return False
+    sources = {source.code: source for source in result.selected_sources}
+    if set(sources) != set(FIELD_DOCUMENTS.values()) or len(sources) != len(result.selected_sources):
+        return False
+    if not result.containers or any(not getattr(record, attr) for record in result.containers for attr in CONTAINER_ATTRS.values()):
+        return False
+    for name, code in FIELD_DOCUMENTS.items():
+        field = result.fields[name]
+        source = sources[code]
+        digest = result.selected_hashes.get(code)
+        if not digest or not matches_identity(result.identity.model_copy(update={'document_date': None}), source.identity):
+            return False
+        if name not in CONTAINER_FIELDS and not field.value:
+            return False
+        if any(e.filename != source.filename or e.content_hash != digest or
+               (PAGES[code] is not None and e.page_number not in PAGES[code]) for e in field.evidence):
+            return False
+    return True
+
+
+def gmail_checks_needed(identity: BillIdentity, today: date, previous: BillResult | None = None,
+                        *, row_successful: bool = False) -> bool:
+    return gmail_window_open(identity, today) or not row_successful or not result_is_success(previous)
 
 
 def matches_identity(expected: BillIdentity, actual: BillIdentity) -> bool:

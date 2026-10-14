@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import anydoc
 import pymupdf
 
 from daily_report import rules
@@ -58,29 +57,14 @@ def extract_layout(pdf: bytes, metadata: DocumentMetadata) -> DocumentLayout:
         doc.close()
 
 
-def render_markdown(pdf: bytes, metadata: DocumentMetadata) -> str:
-    doc = _open(pdf)
-    try:
-        chunks = []
-        for i in range(len(doc)):
-            if not _eligible(i + 1, metadata.code):
-                continue
-            selected = pymupdf.open()
-            try:
-                selected.insert_pdf(doc, from_page=i, to_page=i)
-                native = selected.tobytes()
-            finally:
-                selected.close()
-            try:
-                markdown = anydoc.to_markdown_bytes(native, "pdf", ocr="reject")
-            except Exception as exc:
-                raise RuntimeError(f"Native conversion failed on page {i + 1}") from exc
-            if not markdown.strip():
-                raise RuntimeError(f"Empty native conversion on page {i + 1}")
-            chunks.append(f"--- SOURCE PAGE {i + 1} ---\n{markdown.strip()}")
-        return "\n\n".join(chunks)
-    finally:
-        doc.close()
+def render_markdown(layout: DocumentLayout, metadata: DocumentMetadata) -> str:
+    """Render inspection text from native cells, retaining original page numbers."""
+    chunks = []
+    for page in layout.pages:
+        if _eligible(page.number, metadata.code):
+            text = "\n\n".join(cell.text for cell in _lines(page))
+            chunks.append(f"--- SOURCE PAGE {page.number} ---\n{text}")
+    return "\n\n".join(chunks)
 
 
 def _box(spans):
@@ -450,7 +434,7 @@ def parse_document(layout: DocumentLayout, metadata: DocumentMetadata, content_h
             result.fields[f] = (
                 FieldResult(
                     state="accepted",
-                    value=values,
+                    value_type="records",
                     evidence=evidence,
                     reason="Movement records contain verified empty positions" if not all(values) else None,
                 )
@@ -460,19 +444,3 @@ def parse_document(layout: DocumentLayout, metadata: DocumentMetadata, content_h
     else:
         result.fields = {f: _field(pages, f, metadata, content_hash) for f in fields}
     return result
-
-
-def validate_parsed(parsed: ParsedDocument, layout: DocumentLayout) -> bool:
-    """Re-derive source associations before accepting cached business values.
-
-    Cache reuse skips conversion, but never weakens ownership, identity, geometry,
-    value validation, or evidence requirements. Runtime failures remain retryable.
-    """
-    if layout.document_code not in (None, parsed.metadata.code):
-        return False
-    if any(field.state == "error" for field in parsed.fields.values()):
-        return False
-    try:
-        return parse_document(layout, parsed.metadata, parsed.content_hash) == parsed
-    except ValueError, TypeError:
-        return False

@@ -20,6 +20,19 @@ def test_accepted_value_requires_evidence():
         FieldResult(state='accepted', value=date(2026, 10, 8))
 
 
+def test_accepted_container_outcome_references_records_without_copying_values():
+    from daily_report.models import Evidence
+    evidence = Evidence(filename='source.pdf', content_hash='hash', page_number=1,
+                        label='11.Container', quote='ABCU1234567', bbox=(0, 0, 10, 10))
+    result = FieldResult(state='accepted', value_type='records', evidence=[evidence])
+    assert result.value is None
+    assert FieldResult.model_validate_json(result.model_dump_json()).value_type == 'records'
+    with pytest.raises(ValidationError):
+        FieldResult(state='accepted', value_type='records', value='ABCU1234567', evidence=[evidence])
+    with pytest.raises(ValidationError):
+        FieldResult(state='accepted', value_type='records')
+
+
 def test_container_missing_positions_are_preserved():
     records = [ContainerRecord(number='ABCU1234567', size='20'), ContainerRecord(number='DEFU7654321', seal='X')]
     assert [r.size for r in records] == ['20', None]

@@ -37,12 +37,16 @@ independently; missing earlier documents do not block supported later fields.
 - Invoice excludes its associated date, amount, and currency.
 - No SB22/Gatepass exporter or invoice fallback; no Gatepass order-date LEO fallback.
 - Never derive LEO from filename document date, SB date, or email receipt time.
+- Filled Excel cells are not source evidence. Previously AI-filled values require
+  independent PDF verification; matching Excel alone does not validate extraction.
+  Assessment dates never substitute for LEO. Unsupported new fields remain blank.
 - Before updating part of an existing container triplet, require every retained member
   to match the selected ordered source records. Conflicts block the whole triplet.
 - Keep container, size, and seal as ordered records, preserving missing positions.
   Serialize aligned newline-separated Excel columns only at the write boundary.
   Never independently compact or deduplicate those columns. Verified blank positions
-  may accompany accepted partial lists, but their row remains Partial.
+  may accompany accepted partial records, but their row remains Partial. Container
+  field outcomes carry `value_type="records"` and evidence, never parallel value lists.
 
 ## Identity and Gmail discovery
 
@@ -74,37 +78,60 @@ independently; missing earlier documents do not block supported later fields.
   attachment download tokens can rotate between reads; never use them as persistent
   identity. Missing MIME part IDs receive stable traversal ordinals. Validate retained
   PDF hashes and any supplied fresh inline bytes before reuse.
-- Refresh Gmail metadata each run. Retain matching revisions; rank canonical revisions
-  by filename document timestamp. Equal timestamps with different content are ambiguous.
-- Failed downloads outside the newest timestamp do not block accepted newest fields,
-  but retention failures still produce Error status. Failed newest candidates block
-  that document type; never silently fall back to older evidence.
-- Missing matching documents remain pending. Do not substitute older revisions for
-  blank, rejected, or failed current evidence without a separately agreed rule.
+- At or after SB date + 30 days, skip Gmail only when all selected rows for the bill
+  have actual Status `Success` and fresh native parsing of all three retained PDFs accepts
+  every required owned field with complete aligned container records and no issues/
+  runtime failures. Excel Success alone, saved values, and previously AI-filled cells
+  never establish verified Success.
+- Partial, Not found, and Error rows continue discovery regardless of age, even when
+  complete local source proof exists (for example, from read-only verification).
+  Successful batches younger than 30 days still check revisions. Unknown SB dates
+  cannot establish a cutoff and continue discovery. `--force`/`--refresh` preserve
+  this policy; Billing Status `CANCELLED` always skips discovery regardless of age.
+  Never infer cancellation from Status `Cancelled` alone.
+- During discovery, select the newest canonical filename timestamp per document type.
+  Equal timestamps with different content are ambiguous. Retain only the newest
+  SB21, SB22, and SB35 per batch, at most three PDFs.
+- A failed newest download blocks that document type during live checking; preserve
+  previous local bytes but never silently fall back to them. Safely retain the newer
+  original before removing the obsolete PDF and matching processed JSON/MD.
+- Preserve newest-observed candidates in `result.json` `selected_sources` across scoped
+  runs, including failed downloads; `selected_hashes` holds only validated retained
+  bytes. Local-only runs never fall back to an older PDF after a known newer failure.
+- Local-only successful bills parse saved originals/native layout afresh. Missing or
+  damaged originals prevent verified Success and require discovery. Failures remain
+  isolated by document type: damaged SB21 does not block valid SB22/SB35. Missing
+  matching documents remain pending; never substitute another source.
 
 ## SB working records and reuse
 
 ```text
-data/7546404/07102026-INMBD6/
-├── manifest.json
-├── pdfs/                      # Original matching PDFs and revisions
+data/2026/754640407102026INMBD6/
+├── pdfs/
+│   └── <canonical filename>.pdf
 ├── processed/
-│   └── <PDF content hash>/
-│       ├── layout.json        # Native blocks, coordinates, original pages
-│       ├── document.md        # Human-readable inspection output
-│       └── parsed.json        # Values, evidence, blanks, rejection reasons
-└── result.json                # Selected validated bill result
+│   ├── <same filename stem>.json
+│   └── <same filename stem>.md
+└── result.json
 ```
 
-- Preserve original bytes and filenames. Different content with the same filename
-  requires a deterministic collision suffix and manifest provenance, never overwrite.
-- Always isolate bill date/port beneath its SB folder; unknown components use explicit
-  `unknown` segments. Manifest tracks attachment identity, metadata, PDF hashes,
-  selected source hashes, and processing versions; never merge different identities.
-- Reuse unchanged PDFs and processed artifacts. PDF changes invalidate layout/parsing;
-  parser changes invalidate parsing; rules/layout-profile/converter-package changes
-  invalidate layout and dependent parsing. Cached business values are re-derived from
-  native layout for validation; reuse skips downloads/conversion, not source checks.
+- Year folders use the filename shipping-bill calendar year, never document date:
+  December SB/January LEO remains in the SB year. Unknown SB dates use `unknown` year.
+  Batch names are SB number + SB date + port, generated by rules. Filename metadata
+  resolves document batches; unknown identity components use literal `unknown` in
+  pending folders. Never merge conflicting identities or silently complete workbook identity.
+- Preserve original bytes and canonical filenames, which are expected to be unique.
+  Unexpected same-name/different-content attachments report Error and preserve the
+  original; no collision suffixes. Restore corrupt retained PDFs only when downloaded
+  bytes match the recorded hash; damaged originals cannot qualify for local-only Success.
+- Each processed JSON holds `metadata`, `content_hash`, attachment `sources`, `layout`,
+  `layout_versions`, `fields`, `containers`, and `parser_version` at the top level.
+  Batch `result.json` retains selected source metadata/hashes and workbook identity.
+  No manifest, hash folders, separate layout/parsed files, or cache envelopes.
+- Reuse unchanged PDFs and native layouts. PDF changes invalidate layout; rules/layout
+  profile/PyMuPDF changes invalidate layout reuse. Every run parses native layout once;
+  saved business values are inspection output, never reused for extraction. Markdown
+  is rendered from the same native cells, with no second converter.
 - Keep workbook-provided identity, filename metadata, and PDF-derived fields separate
   with provenance. Flag disagreements rather than silently choosing one.
 - Persist accepted, verified-blank, and rejected outcomes distinctly. Runtime failures
@@ -125,13 +152,14 @@ Package: `src/daily_report/`. Split modules further only for demonstrated need.
 | `models.py` | Typed identities, metadata, evidence, outcomes, container records; no service calls |
 | `gmail.py` | Metadata/downloads; no field extraction or Excel access |
 | `documents.py` | Native layout and generic parsing driven by rules; no Gmail/Excel access |
-| `storage.py` | Artifacts, manifests, reuse, atomic persistence; no field inference/Excel writes |
+| `storage.py` | Document artifacts, reuse, atomic persistence; no field inference/Excel writes |
 | `workbook.py` | Row scope, safe updates, backups/saves; accepts validated results, never parses PDFs |
 
 ## Pipeline and validation
 
-Select rows → discover attachments → validate filenames → retain PDFs → select
-revisions/pages → reuse or extract layout → parse/validate → persist results/evidence
+Select rows → verify local Success/age → discover attachments or use local originals
+→ validate filenames/select newest → retain up to three PDFs → reuse or extract layout
+→ parse/validate → persist results/evidence
 → build permitted updates → write sequentially → backup/save.
 
 - Check native identity-bearing content across all PDF pages, including pages outside
@@ -147,7 +175,7 @@ revisions/pages → reuse or extract layout → parse/validate → persist resul
   Unsupported continuations reject rather than silently return a truncated list.
 - Parse label/cell/bounded-region relationships. Markdown is for inspection, not
   the sole source for interpreting table geometry.
-- Native local conversion only; OCR is disabled. Unreadable, encrypted, scanned,
+- Native PyMuPDF extraction only; OCR is disabled. Unreadable, encrypted, scanned,
   and unsupported-layout documents yield explicit unresolved/error outcomes.
 - Each accepted value carries PDF identity/hash, page, eligible label/header,
   source text, and location. Validate field ownership and source association.
@@ -161,22 +189,29 @@ revisions/pages → reuse or extract layout → parse/validate → persist resul
 - Preserve supported commands and row/SB/sheet scope. Remove/revise obsolete option
   semantics explicitly; retain no AI-specific behaviour.
 - `--check`: read-only, no Gmail calls. Verification: read-only fresh local parsing.
-  `--refresh` reparses stored PDFs; `--no-cache` is removed.
+  Verification reuses layout and parses afresh without workbook writes. `--refresh`
+  re-extracts native layout from stored PDFs without forcing download; `--no-cache` is removed.
+- Normal sync checks filled incomplete/unverified rows too. Preserve their values
+  unless forced; mismatching filled values or missing/rejected selected fields prevent
+  Success. Reuse fresh source parsing within a run, never saved business values.
 - `--force`: permits validated updates to selected filled fields. `--leo-only`: LEO
   data writes only. Status writes obey row/SB filters. Reject unknown sheet names.
 - Preserve formulas and existing values on blank/missing/rejected/conflicting/failed
-  evidence. Never erase an existing date. Store LEO as native `datetime.date`.
+  evidence. Never erase an existing date during routine sync. An explicit user
+  correction may clear a confirmed incorrect value, with backup and scoped
+  verification. Store LEO as native `datetime.date`.
 - Never use `openpyxl.load_workbook(read_only=True)`.
 - Resolve merged cells to top-left parents; flag conflicting updates to shared parents
   instead of allowing worker completion order to choose a value. Merged data cells
-  touching cancelled rows are protected even when those rows are selected.
+  touching cancelled rows are protected even when those rows are selected. A blocked
+  container member blocks the entire proposed triplet; do not write misaligned remnants.
 - Skip `Billing Status == CANCELLED`; stamp selected rows `Cancelled`.
 - Excel writes are sequential. Fetch/parse concurrency is bounded at eight workers;
   Gmail services are thread-local and authentication refresh is protected.
 - Before overwrite, create `.bak-<YYYYMMDD-HHMMSS-ffffff>.xlsx`; retain newest five.
 - FY sheets use `Status`: `Success`, `Partial`, `Cancelled`, `Not found`, `Error`.
   Success requires required-field completeness and no unresolved selected-field validation
-  failure. Error means runtime/conversion failure, not simply missing documents.
+  failure. Error means runtime/extraction failure, not simply missing documents.
 
 ```bash
 uv run --no-sync sync.py --check
@@ -195,4 +230,8 @@ uv run --no-sync ruff check src/ tests/ sync.py
 - Never commit live business documents or secrets. Fixtures must be synthetic/anonymized.
 - Finish replacements by deleting superseded code and updating tests, dependencies,
   README, and this contract. Run relevant checks before claiming completion.
+- Keep current setup/usage in README and maintenance rules here. Remove completed
+  implementation ledgers and unused legacy caches. Build outputs, generated package
+  metadata, bytecode, and test/lint caches are disposable; never delete reusable
+  `data/` records or the active environment as part of routine clutter cleanup.
 - Documentation changes alone do not complete the codebase redesign.

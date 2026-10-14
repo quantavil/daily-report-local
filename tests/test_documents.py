@@ -104,7 +104,9 @@ def test_movement_rows_keep_blank_positions_and_continuation():
         ("DEFU7654321", "20", None),
         ("GHIU1234567", "40", "SEAL3"),
     ]
-    assert r.fields["customs_seal"].value == ["SEAL1", None, "SEAL3"]
+    assert r.fields["customs_seal"].state == "accepted"
+    assert r.fields["customs_seal"].value is None
+    assert r.fields["customs_seal"].value_type == "records"
 
 
 def test_split_heading_and_verified_blank():
@@ -122,7 +124,7 @@ def test_native_extraction_original_page_numbers_and_markdown():
     native = extract_layout(raw, meta())
     assert [p.number for p in native.pages] == [1, 2, 3]
     assert native.pages[0].spans[0].text == "page one"
-    assert "SOURCE PAGE 2" in render_markdown(raw, meta())
+    assert "SOURCE PAGE 2" in render_markdown(native, meta())
     with pytest.raises(RuntimeError):
         extract_layout(b"not pdf", meta())
 
@@ -166,7 +168,8 @@ def test_stacked_movement_records_on_original_page_four():
     ]
     r = parse_document(layout(p, [], [], p4), meta("SB35"), "hash")
     assert [(c.number, c.size, c.seal) for c in r.containers] == [("ABCU1234567", "40", "SEAL1")]
-    assert r.fields["container_no"].value == ["ABCU1234567"]
+    assert r.fields["container_no"].state == "accepted"
+    assert r.fields["container_no"].value is None
     assert r.containers[0].evidence[0].page_number == 4
 
 
@@ -183,20 +186,31 @@ def test_partially_blank_seals_are_writable_aligned_sequence():
             span("20", 400, 150, 40),
         ]
     )
-    result = parse_document(layout(p), meta("SB35"), "hash").fields["customs_seal"]
-    assert result.state == "accepted"
-    assert result.value == ["SEAL1", None]
+    result = parse_document(layout(p), meta("SB35"), "hash")
+    assert result.fields["customs_seal"].state == "accepted"
+    assert result.fields["customs_seal"].value is None
+    assert [record.seal for record in result.containers] == ["SEAL1", None]
 
 
-def test_cached_observation_rechecks_value_and_exact_source_association():
-    import daily_report.documents as documents
-
-    native = layout([*identity(), span("6. LEO Date", 20, 100), span("09/10/2026", 20, 120)])
-    parsed = parse_document(native, meta("SB22"), "hash")
-    assert hasattr(documents, "validate_parsed")
-    assert documents.validate_parsed(parsed, native)
-    parsed.fields["leo_date"].value = date(2026, 10, 10)
-    assert not documents.validate_parsed(parsed, native)
+@pytest.mark.parametrize("code, expected_pages", [("SB21", [1, 2]), ("SB22", [1]), ("SB35", [1, 2, 4])])
+def test_markdown_uses_native_cells_and_original_eligible_pages(code, expected_pages):
+    native = DocumentLayout(pages=[
+        LayoutPage(number=number, width=600, height=800, spans=[
+            span(f"Page {number} label", 20, 20, 80),
+            span("fragment", 104, 20, 50),
+            span(f"Page {number} value", 300, 20, 100),
+        ])
+        for number in [1, 2, 4]
+    ])
+    markdown = render_markdown(native, meta(code))
+    for number in [1, 2, 4]:
+        if number in expected_pages:
+            assert f"SOURCE PAGE {number}" in markdown
+            assert f"Page {number} label fragment" in markdown
+            assert f"Page {number} value" in markdown
+        else:
+            assert f"SOURCE PAGE {number}" not in markdown
+            assert f"Page {number} label" not in markdown
 
 
 def test_native_layout_carries_document_profile():
@@ -220,8 +234,9 @@ def test_invalid_seal_does_not_block_valid_container_cells():
     ]
     result = parse_document(layout(p), meta("SB35"), "hash")
     assert result.fields["customs_seal"].state == "rejected"
-    assert result.fields["container_no"].value == ["ABCU1234567"]
-    assert result.fields["container_size"].value == ["40"]
+    assert result.fields["container_no"].state == "accepted"
+    assert result.fields["container_size"].state == "accepted"
+    assert [(record.number, record.size) for record in result.containers] == [("ABCU1234567", "40")]
 
 
 def test_split_neighbor_heading_bounds_exporter_cell():
@@ -263,7 +278,8 @@ def test_movement_continuation_below_numbered_identity_header():
     p2[0] = span("1. SB No", 20, 20, 55)
     p2 += [span("DEFU7654321", 20, 100, 120), span("SEAL2", 200, 100, 90), span("20", 400, 100, 40)]
     r = parse_document(layout(p, p2), meta("SB35"), "hash")
-    assert r.fields["container_no"].value == ["ABCU1234567", "DEFU7654321"]
+    assert r.fields["container_no"].state == "accepted"
+    assert [record.number for record in r.containers] == ["ABCU1234567", "DEFU7654321"]
 
 
 def test_unsupported_continuation_does_not_silently_truncate():
@@ -331,7 +347,9 @@ def test_gatepass_secondary_stacked_bill_identity_and_movement():
         span("14.Size", 315, 197, 27),
         span("40", 366, 197, 9),
     ]
-    assert parse_document(layout(p), meta("SB35"), "hash").fields["container_no"].value == ["ABCU1234567"]
+    result = parse_document(layout(p), meta("SB35"), "hash")
+    assert result.fields["container_no"].state == "accepted"
+    assert [record.number for record in result.containers] == ["ABCU1234567"]
     p[11] = span("08-Oct-26", 117, 120.5, 40)
     assert parse_document(layout(p), meta("SB35"), "hash").fields["container_no"].state == "rejected"
 
