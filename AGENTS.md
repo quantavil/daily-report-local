@@ -177,7 +177,7 @@ data/<SB year>/<SB:7><SB date:DDMMYYYY><port:6>/
 
 ## Privacy and definition of done
 
-- Git-ignored: `data/`, `.env`, `credentials.json`, `token.json`, `*.pdf`, backups and
+- Git-ignored: `data/`, `.env`, `*.pdf`, backups and
   all `*.xlsx` except the root report. Never commit live documents or secrets.
 - Done means: `bun test` and `bun check` pass; no dead code, superseded files or unused
   dependencies; `AGENTS.md` and `README.md` match the implemented behavior.

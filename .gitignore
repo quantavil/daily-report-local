@@ -1,7 +1,5 @@
 # Secrets & Local Credentials (NEVER COMMIT)
 .env
-credentials.json
-token.json
 .cache/
 data/
 *.pdf
