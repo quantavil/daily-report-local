@@ -1,0 +1,24 @@
+{
+  "name": "daily-report-local",
+  "version": "1.0.0",
+  "module": "src/ts/cli.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "sync": "bun src/ts/cli.ts",
+    "dev": "bun src/ts/server.ts",
+    "typecheck": "bun check"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/proper-lockfile": "^4.1.4"
+  },
+  "peerDependencies": {
+    "typescript": "^7"
+  },
+  "dependencies": {
+    "fflate": "^0.8.3",
+    "mupdf": "^1.28.1",
+    "proper-lockfile": "^4.1.2"
+  }
+}

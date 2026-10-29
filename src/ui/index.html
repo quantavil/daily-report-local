@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Daily Report</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23111'/%3E%3Cpath d='M4 8.5l2.5 2.5L12 5.5' fill='none' stroke='%23fff' stroke-width='2'/%3E%3C/svg%3E">
+<script>try { document.documentElement.dataset.theme = localStorage.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); } catch { document.documentElement.dataset.theme = 'light'; }</script>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f3f2ee; --card: #ffffff; --ink: #151513; --muted: #6f6d68;
+  --edge: #d3d0c8; --edge-hi: #a9a69d; --line: #e6e3dc; --well: #f7f6f2;
+  --btn: #151513; --btn-ink: #ffffff; --btn-hover: #34332f;
+  --shadow: 0 1px 2px rgba(40, 36, 28, 0.06), 0 8px 24px -12px rgba(40, 36, 28, 0.12);
+  --green: #e9f2e8; --green-ink: #2f6334; --yellow: #fbf1d3; --yellow-ink: #8a5c00;
+  --red: #fbe6e7; --red-ink: #9a2b29; --blue: #dff1fc; --blue-ink: #1b6697; --grey: #efeeea; --grey-ink: #5a5954;
+  --serif: 'Newsreader', 'Instrument Serif', 'Iowan Old Style', Georgia, serif;
+  --sans: 'Geist Sans', 'SF Pro Display', 'Helvetica Neue', 'Segoe UI', system-ui, sans-serif;
+  --mono: 'Geist Mono', 'SF Mono', 'JetBrains Mono', ui-monospace, Menlo, monospace;
+}
+:root[data-theme=dark] {
+  color-scheme: dark;
+  --bg: #101010; --card: #1a1a19; --ink: #efeeea; --muted: #a09f9a;
+  --edge: #3b3b38; --edge-hi: #67665f; --line: #2a2a28; --well: #141413;
+  --btn: #efeeea; --btn-ink: #121211; --btn-hover: #ffffff;
+  --shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 12px 28px -16px rgba(0, 0, 0, 0.8);
+  --green: #1d2c1f; --green-ink: #93c997; --yellow: #33291a; --yellow-ink: #e3b660;
+  --red: #3a2021; --red-ink: #f09b98; --blue: #16293a; --blue-ink: #80c3ee; --grey: #262625; --grey-ink: #b0afab;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 var(--sans); -webkit-font-smoothing: antialiased; text-wrap: pretty; }
+main { max-width: 880px; margin: 0 auto; padding: 28px 16px 96px; }
+.top { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 20px; }
+.brand { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; font: 400 24px var(--serif); letter-spacing: -0.02em; }
+.brand small { font: 12.5px var(--mono); color: var(--muted); letter-spacing: 0; border: 1px solid var(--edge); border-radius: 4px; padding: 1px 8px; background: var(--card); }
+.brand small:empty { display: none; }
+.right { display: flex; align-items: center; gap: 8px; }
+.icon { padding: 8px; width: 36px; height: 36px; }
+.icon svg { width: 16px; height: 16px; }
+:root[data-theme=dark] .sun, :root:not([data-theme=dark]) .moon { display: none; }
+.card { background: var(--card); border: 1px solid var(--edge); border-radius: 14px; padding: 32px; margin-bottom: 16px; box-shadow: var(--shadow); }
+.eyebrow { margin: 0 0 6px; font-size: 12px; font-weight: 500; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); }
+.big { font: 400 clamp(56px, 12vw, 88px)/1 var(--serif); letter-spacing: -0.04em; font-variant-numeric: tabular-nums; }
+.sub { margin: 10px 0 0; color: var(--muted); }
+#outcome { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--edge); }
+.hero { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; flex-wrap: wrap; }
+.cta { display: flex; gap: 8px; flex-wrap: wrap; }
+button { white-space: nowrap; font: 500 14px var(--sans); display: inline-flex; align-items: center; justify-content: center; gap: 8px; border-radius: 8px; padding: 11px 20px; cursor: pointer; border: 1px solid var(--edge); background: var(--card); color: var(--ink); transition: transform 0.15s, background 0.15s, border-color 0.15s, box-shadow 0.15s; }
+button:hover:not(:disabled) { background: var(--well); border-color: var(--edge-hi); }
+button:active:not(:disabled) { transform: scale(0.98); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+button.primary { background: var(--btn); color: var(--btn-ink); border-color: var(--btn); padding: 12px 26px; font-size: 15px; }
+button.primary:hover:not(:disabled) { background: var(--btn-hover); border-color: var(--btn-hover); }
+button.link { border: 0; background: none; padding: 6px 0; color: var(--muted); text-decoration: underline; text-underline-offset: 3px; border-radius: 4px; }
+button.link:hover:not(:disabled) { background: none; color: var(--ink); }
+:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+svg { width: 14px; height: 14px; fill: currentColor; flex: none; }
+.years { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 12px; margin-top: 32px; }
+.tile { flex-direction: column; align-items: stretch; gap: 0; text-align: left; padding: 16px; border-radius: 10px; font-weight: 400; background: var(--card); }
+.tile[aria-pressed=true] { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); background: var(--well); }
+.tile b { font: 500 13px var(--sans); color: var(--muted); }
+.tile[aria-pressed=true] b { color: var(--ink); }
+.tile .n { font: 400 32px/1.15 var(--serif); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.tile .d { font-size: 12.5px; color: var(--muted); line-height: 1.4; margin-top: 2px; overflow-wrap: anywhere; }
+.stack { display: flex; width: 100%; height: 6px; border-radius: 3px; overflow: hidden; background: var(--line); border: 1px solid var(--edge); margin-top: 14px; }
+.stack i { display: block; height: 100%; }
+.stack .done { background: var(--green-ink); opacity: 0.7; } .stack .todo { background: var(--yellow-ink); } .stack .gone { background: var(--grey-ink); opacity: 0.45; }
+.skel { min-height: 118px; pointer-events: none; background: linear-gradient(100deg, var(--well) 30%, var(--line) 50%, var(--well) 70%) 0 0 / 200% 100%; animation: shimmer 1.4s linear infinite; }
+@keyframes shimmer { to { background-position: -200% 0; } }
+.opts { margin-top: 24px; border: 1px solid var(--edge); border-radius: 10px; background: var(--well); }
+.opts summary { cursor: pointer; color: var(--muted); font-size: 13px; font-weight: 500; padding: 12px 16px; border-radius: 10px; }
+.opts summary:hover { color: var(--ink); }
+.opts[open] summary { border-bottom: 1px solid var(--line); border-radius: 10px 10px 0 0; }
+.opts .body { padding: 16px; }
+.fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px 16px; align-items: end; }
+label { display: block; font-size: 12px; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+label.check { display: flex; gap: 10px; align-items: center; text-transform: none; letter-spacing: 0; font-size: 14px; font-weight: 400; color: var(--ink); margin: 0; padding: 10px 12px; border: 1px solid var(--edge); border-radius: 8px; background: var(--card); cursor: pointer; white-space: nowrap; }
+label.check:hover { border-color: var(--edge-hi); }
+input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--ink); margin: 0; }
+input[type=text] { font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--edge); border-radius: 8px; padding: 10px 12px; width: 100%; transition: border-color 0.15s, box-shadow 0.15s; }
+input[type=text]::placeholder { color: var(--muted); opacity: 0.6; }
+input[type=text]:hover { border-color: var(--edge-hi); }
+input[type=text]:focus { outline: none; border-color: var(--ink); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 14%, transparent); }
+.tools { display: flex; gap: 20px; margin-top: 14px; flex-wrap: wrap; }
+.banner { margin-top: 16px; padding: 12px 16px; border-radius: 10px; font-size: 14px; background: var(--red); color: var(--red-ink); border: 1px solid color-mix(in srgb, var(--red-ink) 30%, transparent); }
+.live-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.bar { height: 10px; background: var(--well); border: 1px solid var(--edge); border-radius: 6px; overflow: hidden; margin: 22px 0 12px; }
+.bar i { display: block; height: 100%; width: 0; background: var(--ink); border-radius: 5px; transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
+.feed { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+.pill { display: inline-block; border-radius: 6px; padding: 2px 10px; font-size: 11px; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; white-space: nowrap; background: var(--grey); color: var(--grey-ink); border: 1px solid color-mix(in srgb, currentColor 28%, transparent); }
+.Success, .ok { background: var(--green); color: var(--green-ink); }
+.Partial, .missing, .busy { background: var(--yellow); color: var(--yellow-ink); }
+.Error, .fail { background: var(--red); color: var(--red-ink); }
+.Notfound { background: var(--blue); color: var(--blue-ink); }
+.Cancelled { background: var(--grey); color: var(--grey-ink); }
+.results { padding: 0; overflow: hidden; }
+.tabs { display: flex; gap: 0; background: var(--well); border-bottom: 1px solid var(--edge); padding: 0 8px; overflow-x: auto; overflow-y: hidden; }
+.tabs button { border: 0; border-radius: 0; background: none; padding: 14px 16px; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }
+.tabs button:hover:not(:disabled) { background: none; color: var(--ink); }
+.tabs button[aria-selected=true] { color: var(--ink); border-bottom-color: var(--ink); }
+.tabs span { color: var(--muted); font-weight: 400; margin-left: 6px; font-variant-numeric: tabular-nums; }
+ul { list-style: none; margin: 0; padding: 0; }
+li.item { display: grid; grid-template-columns: 112px 1fr; gap: 4px 16px; padding: 16px 24px; border-bottom: 1px solid var(--line); animation: rise 0.45s cubic-bezier(0.16, 1, 0.3, 1); transition: background 0.15s; }
+li.item:hover { background: var(--well); }
+li.item:last-child { border-bottom: 0; }
+li .who { font-weight: 500; font-variant-numeric: tabular-nums; }
+li .where { color: var(--muted); font-size: 13px; margin-left: 8px; font-variant-numeric: tabular-nums; }
+li .why { color: var(--muted); font-size: 14px; margin-top: 2px; }
+li .why div + div { margin-top: 2px; }
+li.more { display: block; padding: 14px 24px; color: var(--muted); font-size: 13px; background: var(--well); border-top: 1px solid var(--edge); }
+.empty { padding: 40px 24px 36px; text-align: center; color: var(--muted); }
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } }
+details.log { padding: 0; }
+details.log summary { cursor: pointer; color: var(--muted); font-size: 13px; font-weight: 500; padding: 16px 24px; border-radius: 14px; }
+details.log summary:hover { color: var(--ink); }
+details.log[open] summary { border-bottom: 1px solid var(--edge); border-radius: 14px 14px 0 0; }
+pre { margin: 0; padding: 16px 24px; background: var(--well); border-radius: 0 0 14px 14px; overflow: auto; max-height: 340px; font: 12.5px/1.65 var(--mono); }
+@media (prefers-reduced-motion: reduce) { li.item, .skel { animation: none; } .bar i, button, input { transition: none; } html { scroll-behavior: auto; } }
+@media (max-width: 560px) {
+  main { padding-top: 20px; } .card { padding: 20px; } .cta { width: 100%; } .cta button { flex: 1; }
+  li.item { grid-template-columns: 1fr; padding: 14px 20px; } li.more, details.log summary, pre { padding-left: 20px; padding-right: 20px; }
+}
+</style>
+</head>
+<body>
+<main>
+  <div class="top">
+    <div class="brand">Daily Report <small id="book"></small></div>
+    <div class="right">
+      <span id="state" class="pill" hidden></span>
+      <button class="icon" id="theme" aria-label="Switch light or dark theme" title="Switch theme">
+        <svg class="sun" viewBox="0 0 16 16"><circle cx="8" cy="8" r="3.2"/><path d="M8 .8v2M8 13.2v2M.8 8h2M13.2 8h2M2.9 2.9l1.4 1.4M11.7 11.7l1.4 1.4M2.9 13.1l1.4-1.4M11.7 4.3l1.4-1.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        <svg class="moon" viewBox="0 0 16 16"><path d="M13.5 9.6A5.8 5.8 0 0 1 6.4 2.5a5.8 5.8 0 1 0 7.1 7.1z"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <section class="card" id="home">
+    <div class="hero">
+      <div>
+        <p class="eyebrow" id="eyebrow">Rows to sync</p>
+        <div class="big" id="big">&ndash;</div>
+        <p class="sub" id="bigSub">Reading the workbook...</p>
+      </div>
+      <div class="cta">
+        <button class="primary" id="sync"><svg viewBox="0 0 16 16"><path d="M4 2.5v11l9-5.5z"/></svg><span id="syncLabel">Sync</span></button>
+        <button id="preview" title="Do everything except save the workbook">Preview</button>
+      </div>
+    </div>
+    <div class="years" id="years"><div class="tile skel"></div><div class="tile skel"></div><div class="tile skel"></div><div class="tile skel"></div></div>
+    <div class="banner" id="error" hidden></div>
+    <details class="opts">
+      <summary>Options</summary>
+      <div class="body"><div class="fields">
+        <div><label for="sb">Shipping bill</label><input id="sb" type="text" inputmode="numeric" placeholder="7546404" autocomplete="off"></div>
+        <div><label for="rows">Excel rows</label><input id="rows" type="text" placeholder="1349-1351" autocomplete="off"></div>
+        <label class="check"><input id="force" type="checkbox"> Recheck finished rows</label>
+        <label class="check"><input id="leo" type="checkbox"> LEO date only</label>
+      </div>
+      <div class="tools">
+        <button class="link" id="check" title="List rows that still have empty fields. Reads the workbook only.">List missing fields</button>
+        <button class="link" id="verify" title="Compare saved PDFs with Excel. Needs Excel rows.">Verify rows against PDFs</button>
+      </div></div>
+    </details>
+  </section>
+
+  <section class="card" id="live" hidden>
+    <div class="live-head">
+      <div>
+        <p class="eyebrow" id="liveLabel"></p>
+        <div class="big" id="liveNum"></div>
+      </div>
+      <button id="stop"><svg viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="1"/></svg>Stop</button>
+    </div>
+    <div class="bar" id="bar"><i id="fill"></i></div>
+    <p class="sub" id="liveNow"></p>
+    <div class="feed" id="feed"></div>
+    <p class="sub" id="outcome" hidden></p>
+  </section>
+
+  <section class="card results" id="results" hidden>
+    <div class="tabs" id="tabs" role="tablist"></div>
+    <ul id="list"></ul>
+    <p class="empty" id="empty" hidden></p>
+  </section>
+
+  <details class="card log" id="logBox" hidden>
+    <summary>Full log</summary>
+    <pre id="log"></pre>
+  </details>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const FIELD = { shipper_name: 'Exporter', inv_no: 'Invoice', leo_date: 'LEO date', container_no: 'Container', container_size: 'Size', customs_seal: 'Seal' };
+const ROW = /^\[(?:(\d{4}-\d{2}) )?row (\d+)\] SB (\d{7})\s+(Success|Partial|Not found|Cancelled|Error|missing)\s*(.*)$/;
+const CHECK = /^\[(?:(\d{4}-\d{2}) )?check\] (\d+) incomplete · (\d+) cancelled · (\d+) identity error\(s\) · (\d+) to sync · (\d+) rows$/;
+const cls = name => name.replace(' ', '');
+const num = n => n.toLocaleString('en-IN');
+const S = { years: [], sel: '', runId: -1, seen: 0, polling: false, running: false, rows: [], tab: 'attention', total: 0, done: 0, feed: [], only: '', started: 0, finish: '' };
+
+/* ---------- overview (what is waiting) ---------- */
+async function loadOverview() {
+  let lines = [];
+  try { lines = (await (await fetch('/api/overview')).json()).lines; } catch { $('years').replaceChildren(); $('bigSub').textContent = 'Could not reach the server.'; return; }
+  const years = []; let single = '', error = '';
+  for (const line of lines) {
+    let m;
+    if ((m = /^\[workbook\] (.+)$/.exec(line))) $('book').textContent = m[1].split(/[\\/]/).pop();
+    else if ((m = /^\[sheets\] FY (\d{4}-\d{2})$/.exec(line))) single = m[1];
+    else if ((m = CHECK.exec(line))) years.push({ fy: m[1] ?? single, cancelled: +m[3], errors: +m[4], todo: +m[5], rows: +m[6] });
+    else if (/^ERROR/.test(line)) error = line.replace(/^ERROR:\s*/, '');
+  }
+  S.years = years.reverse();
+  if (S.sel !== 'all' && !S.years.some(y => y.fy === S.sel)) S.sel = S.years[0]?.fy ?? 'all';
+  $('error').hidden = !error; $('error').textContent = error;
+  if (error) { $('big').textContent = '-'; $('bigSub').textContent = 'Could not read the workbook.'; }
+  renderHome();
+}
+
+const scoped = () => S.sel === 'all' ? S.years : S.years.filter(y => y.fy === S.sel);
+const sum = (list, key) => list.reduce((n, y) => n + y[key], 0);
+
+function tile(label, list, key) {
+  const todo = sum(list, 'todo'), gone = sum(list, 'cancelled') + sum(list, 'errors'), done = Math.max(0, sum(list, 'rows') - todo - gone), rows = Math.max(1, sum(list, 'rows'));
+  const b = document.createElement('button');
+  b.className = 'tile'; b.setAttribute('aria-pressed', S.sel === key);
+  b.innerHTML = `<b></b><span class="n"></span><span class="d"></span><span class="stack"><i class="done"></i><i class="todo"></i><i class="gone"></i></span>`;
+  b.querySelector('b').textContent = label;
+  b.querySelector('.n').textContent = num(todo);
+  b.querySelector('.d').textContent = `${num(done)} done` + (gone ? ` · ${num(gone)} cancelled` : '');
+  const [d, t, g] = b.querySelectorAll('.stack i');
+  d.style.width = done / rows * 100 + '%'; t.style.width = todo / rows * 100 + '%'; g.style.width = gone / rows * 100 + '%';
+  b.onclick = () => { S.sel = key; renderHome(); };
+  return b;
+}
+
+function renderHome() {
+  const years = $('years'); years.replaceChildren();
+  if (S.years.length > 1) { years.append(tile('All years', S.years, 'all')); for (const y of S.years) years.append(tile(y.fy, [y], y.fy)); }
+  const list = scoped(), todo = sum(list, 'todo');
+  if (S.years.length) {
+    $('big').textContent = num(todo);
+    const done = Math.max(0, sum(list, 'rows') - todo - sum(list, 'cancelled') - sum(list, 'errors'));
+    $('bigSub').textContent = todo ? `${num(done)} already done` : 'Everything is up to date';
+  }
+  $('eyebrow').textContent = S.sel === 'all' ? 'Rows to sync' : `Rows to sync · ${S.sel}`;
+  renderCta();
+}
+
+function renderCta() {
+  const todo = sum(scoped(), 'todo'), busy = S.running, force = $('force').checked;
+  $('syncLabel').textContent = todo || force ? `Sync${todo && !force ? ' ' + num(todo) + ' rows' : ''}` : 'Up to date';
+  $('sync').disabled = busy || !S.years.length || (!todo && !force);
+  for (const id of ['preview', 'check', 'verify']) $(id).disabled = busy || !S.years.length;
+}
+
+/* ---------- results ---------- */
+function why(detail, status) {
+  if (/^[a-z_]+(, [a-z_]+)*$/.test(detail)) return [`Empty: ${detail.split(', ').map(f => FIELD[f] ?? f).join(', ')}`];
+  const groups = new Map(), free = [];
+  for (const part of detail.split('; ')) {
+    const m = /^([a-z_]+): (.*)$/.exec(part);
+    if (m && FIELD[m[1]]) groups.set(m[2], [...(groups.get(m[2]) ?? []), FIELD[m[1]]]);
+    else if (part) free.push(part);
+  }
+  const every = Object.keys(FIELD).length;
+  return [...[...groups].flatMap(([reason, fields]) => fields.length < every ? [`${fields.join(', ')}: ${reason}`] : status === 'Not found' ? [] : [reason]), ...free];
+}
+
+const needsAttention = r => r.status !== 'Success' && r.status !== 'Cancelled';
+function renderResults() {
+  const tabs = { attention: S.rows.filter(needsAttention), done: S.rows.filter(r => r.status === 'Success'), all: S.rows };
+  $('tabs').replaceChildren(...Object.entries({ attention: 'Needs attention', done: 'Done', all: 'All' }).map(([key, label]) => {
+    const b = document.createElement('button'); b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', S.tab === key);
+    b.append(label); const c = document.createElement('span'); c.textContent = tabs[key].length; b.append(c);
+    b.onclick = () => { S.tab = key; renderResults(); };
+    return b;
+  }));
+  const shown = tabs[S.tab], years = new Set(S.rows.map(r => r.fy)).size > 1;
+  $('list').replaceChildren(...shown.slice(0, 300).map(r => {
+    const li = document.createElement('li'); li.className = 'item';
+    const pill = document.createElement('div'), p = document.createElement('span'); p.className = 'pill ' + cls(r.status); p.textContent = r.status === 'missing' ? 'Empty' : r.status; pill.append(p);
+    const body = document.createElement('div');
+    body.innerHTML = '<span class="who"></span><span class="where"></span><div class="why"></div>';
+    body.querySelector('.who').textContent = 'SB ' + r.sb;
+    body.querySelector('.where').textContent = (years && r.fy ? r.fy + ' · ' : '') + 'row ' + r.row;
+    for (const text of why(r.detail, r.status)) { const d = document.createElement('div'); d.textContent = text; body.querySelector('.why').append(d); }
+    li.append(pill, body); return li;
+  }));
+  if (shown.length > 300) { const li = document.createElement('li'); li.className = 'more'; li.textContent = `Showing 300 of ${shown.length}. Open the full log for the rest.`; $('list').append(li); }
+  $('empty').hidden = shown.length > 0;
+  $('empty').textContent = S.tab === 'attention' ? (S.rows.length ? 'Nothing needs attention.' : 'No rows to show.') : 'No rows here.';
+}
+
+/* ---------- live run ---------- */
+function reset() {
+  Object.assign(S, { seen: 0, rows: [], total: 0, done: 0, feed: [], only: '', started: Date.now(), tab: 'attention', finish: '' });
+  $('log').textContent = ''; $('feed').replaceChildren(); $('outcome').hidden = true;
+  $('liveNow').textContent = ''; $('fill').style.width = '0'; $('liveNum').textContent = '';
+}
+
+function consume(line) {
+  let m;
+  if ((m = ROW.exec(line))) {
+    S.rows.push({ fy: m[1] ?? S.only, row: m[2], sb: m[3], status: m[4], detail: m[5] });
+      } else if ((m = /^\[progress\] (\d+)\/(\d+) SB (\d{7}) (.+)$/.exec(line))) {
+    S.done = +m[1]; S.total = +m[2]; S.feed = [...S.feed.slice(-5), { sb: m[3], status: m[4] }];
+  } else if ((m = /^\[sheets\] FY (\d{4}-\d{2})$/.exec(line))) S.only = m[1];
+  else if ((m = /^\[(?:sync|verify)\] (\d+) to process/.exec(line))) S.total = +m[1];
+  else if (/^\[(done|check)\]/.test(line)) S.finish = line;
+}
+
+const modeOf = c => c.includes('--verify-rows') ? 'Verify' : / -c( |$)/.test(c) ? 'Check' : / -n( |$)/.test(c) ? 'Preview' : 'Sync';
+
+function renderLive(state) {
+  const failed = !state.running && state.exitCode, mode = modeOf(state.command);
+  const counted = mode === 'Sync' || mode === 'Preview';
+  $('live').hidden = $('results').hidden = $('logBox').hidden = state.id === 0;
+  $('liveLabel').textContent = mode;
+  $('stop').hidden = !state.running;
+  $('bar').hidden = !(state.running && S.total && counted);
+  $('fill').style.width = (S.total ? S.done / S.total * 100 : 0) + '%';
+  $('liveNum').textContent = failed ? 'Stopped' : counted && S.total ? `${num(S.done)} / ${num(S.total)}` : state.running ? '...' : mode === 'Check' ? 'Checked' : S.rows.length ? 'Done' : 'Nothing to do';
+  $('liveNow').textContent = state.running ? `${Math.round((Date.now() - S.started) / 1000)}s` : '';
+  $('feed').replaceChildren(...(state.running ? S.feed.slice().reverse().map(f => { const p = document.createElement('span'); p.className = 'pill ' + cls(f.status); p.textContent = `${f.sb} ${f.status}`; return p; }) : []));
+  const hasEnd = !state.running && (S.finish || failed);
+  $('outcome').hidden = !hasEnd;
+  if (hasEnd) {
+    const errorLine = failed && $('log').textContent.split('\n').reverse().find(l => /^ERROR/.test(l));
+    $('outcome').textContent = errorLine ? errorLine.replace(/^ERROR:\s*/, '') : S.finish.replace(/^\[\w+\]\s*/, '').split(' · ').slice(-1)[0];
+  }
+}
+
+function render(state) {
+  if (state.id !== S.runId) { S.runId = state.id; reset(); }
+  const wasRunning = S.running;
+  S.running = state.running;
+  for (const line of state.lines) { consume(line); $('log').textContent += line + '\n'; }
+  S.seen += state.lines.length;
+  if (state.lines.length) { const log = $('log'); log.scrollTop = log.scrollHeight; }
+  const failed = !state.running && state.exitCode;
+  $('state').hidden = !state.running && !failed;
+  $('state').textContent = state.running ? 'Running' : 'Failed';
+  $('state').className = 'pill ' + (state.running ? 'busy' : 'fail');
+  renderLive(state);
+  if (S.runId !== 0) renderResults();
+  if (!state.running && (modeOf(state.command) === 'Verify' || failed)) $('logBox').open = true;
+  renderCta();
+  if (wasRunning && !state.running) loadOverview();
+}
+
+async function poll() {
+  if (S.polling) return;
+  S.polling = true;
+  try { render(await (await fetch('/api/log?from=' + (S.runId === -1 ? 0 : S.seen))).json()); }
+  catch { $('state').hidden = false; $('state').textContent = 'Server offline'; $('state').className = 'pill fail'; }
+  S.polling = false;
+}
+
+async function post(path, body) {
+  const res = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}) });
+  return res.ok ? null : (await res.json()).error;
+}
+
+async function start(mode) {
+  const body = { mode, scope: S.sel === 'all' ? 'all' : 'fy', fy: S.sel, sb: $('sb').value.trim(), rows: $('rows').value.trim(), force: $('force').checked, leoOnly: $('leo').checked };
+  const error = await post('/api/run', body);
+  $('error').hidden = !error; $('error').textContent = error ?? '';
+  if (!error) { S.runId = -1; await poll(); window.scrollTo({ top: $('live').offsetTop - 16, behavior: 'smooth' }); }
+}
+
+$('sync').onclick = () => start('sync');
+$('preview').onclick = () => start('dry');
+$('check').onclick = () => start('check');
+$('verify').onclick = () => start('verify');
+$('theme').onclick = () => {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  try { localStorage.theme = next; } catch {}
+};
+$('stop').onclick = () => post('/api/stop');
+$('force').onchange = renderCta;
+loadOverview(); poll(); setInterval(poll, 700);
+</script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+# Secrets & Local Credentials (NEVER COMMIT)
+.env
+credentials.json
+token.json
+.cache/
+data/
+*.pdf
+
+# Excel Workbooks & Backups (track only the main report)
+*.xlsx
+!/Daily Working Report.xlsx
+*.bak*
+.~lock.*#
+
+# OS / Editor
+.DS_Store
+*.swp
+*.swo
+.vscode/
+.idea/
+node_modules/
