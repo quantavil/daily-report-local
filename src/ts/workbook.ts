@@ -64,11 +64,12 @@ export class WorkbookStore {
       const raw = text(cell('sb_no'));
       if (blank(raw)) continue;
       const sb = raw!.trim().replace(/\.0$/, '');
-      if (!/^[0-9]{7}$/.test(sb) || (sb_no && sb !== sb_no)) continue;
+      if (sb_no && sb !== sb_no) continue;
       const status = text(cell('status'));
       const cancelled = text(cell('billing_status'))?.trim().toUpperCase() === rules.EXCEL_CANCELLED_VALUE;
       if (cancelled) { rows.push({row_idx:row, identity:{sb_no:sb}, values:{}, cancelled:true,status}); continue; }
       try {
+        rules.create_identity({sb_no:sb});
         const port = text(cell('port_code'));
         const identity = rules.create_identity({sb_no:sb, sb_date:date(cell('sb_date')), port_code:blank(port) ? null : port, document_date:date(cell('document_date'))});
         const values: WorkbookRow['values'] = {};

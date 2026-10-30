@@ -12,6 +12,15 @@ const update = (row_idx: number, over: Partial<RowUpdate> = {}): RowUpdate => ({
 const cells = async (path: string, sheet = SHEET) => readCells(await openBook(new Uint8Array(await readFile(path))), sheet);
 
 describe('workbook safety', () => {
+  test('reports invalid bill numbers within scope while cancellation takes precedence', async () => {
+    const path = await fixture([['123', 'bad date', 'bad'], ['bad', 'bad date', 'bad', null, null, null, null, null, null, 'CANCELLED'], ['7546404', '07/10/2026', 'INMBD6']]);
+    const store = await WorkbookStore.open(path);
+    const rows = store.rows(SHEET);
+    expect(rows).toHaveLength(3);
+    expect(rows[0]?.error).toContain('SB number');
+    expect(rows[1]).toMatchObject({cancelled:true});
+    expect(store.rows(SHEET, undefined, '7546404').map(row => row.row_idx)).toEqual([4]);
+  });
   test('reads scoped rows, ISO dates from serials and cancelled rows', async () => {
     const path = await fixture([
       ['7546404', '<c r="B2"><v>46302</v></c>', 'INMBD6', null, null, null, null, null, null, null, 'Partial'],

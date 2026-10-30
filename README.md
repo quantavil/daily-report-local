@@ -18,7 +18,7 @@ bun install
 ```bash
 bun run sync                   # fill all FY sheets (new / unfinished rows only)
 bun run sync -c                # only list rows with missing fields (no Gmail, no writes)
-bun run sync -n                # dry run: nothing is saved
+bun run sync -n                # dry run: workbook is not saved; PDF artifacts are retained
 bun run sync --sb 7546404      # one shipping bill
 bun run sync -r 1349-1351      # rows 1349 to 1351 (of the latest sheet; add --fy for another)
 bun run sync --latest          # only the newest FY sheet
@@ -40,6 +40,10 @@ Output:
 [done] Success 3 · Partial 1 · 4.2s · workbook saved
 ```
 
+During processing the CLI shows a live counter in a terminal, or `[progress]` lines
+when output is piped. These updates are provisional; the row statuses printed after
+each sheet reflect workbook safety checks. `--quiet` suppresses progress.
+
 `bun run sync -h` lists every option (other sheet, other workbook, LEO-only, read-only
 verify against saved PDFs, worker count, data folder). Defaults come from `.env`
 (`EXCEL_PATH`, `DAILY_REPORT_DATA_DIR`).
@@ -55,7 +59,8 @@ verify against saved PDFs, worker count, data folder). Defaults come from `.env`
 A row becomes `Success` only when all six fields are verified against the PDFs; after that
 it is never touched again unless you pass `--force`. Anything unclear is left blank or
 unchanged and the row stays `Partial`. Cancelled bills (Billing Status `CANCELLED`) are
-ignored.
+ignored. Nonempty invalid bill identities are reported as row errors, and `--check`
+returns a nonzero exit status when it finds one.
 
 ## Safety
 

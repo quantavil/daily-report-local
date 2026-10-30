@@ -58,3 +58,23 @@ test('concurrent stores preserve every source reference', async () => {
   for(let i=0;i<5;i++) expect((await store.get_pdf({...first,message_id:`m${i}`}))?.toString()).toBe('original');
  } finally { await rm(root,{recursive:true,force:true}); }
 });
+
+test('failed re-observation of a retained filename blocks local verification until validated again', async () => {
+ const root=await mkdtemp(join(tmpdir(),'report-')); try {
+  const store=new BillStorage(root,first.metadata.identity);
+  const digest=await store.put_pdf(first,Buffer.from('original'));
+  const result={identity:first.metadata.identity,fields:{},containers:[],selected_sources:[first.metadata],selected_hashes:{SB22:digest},issues:[],errors:[]};
+  await store.put_result(result);
+  await store.put_result({...result,selected_hashes:{},errors:['different bytes for the same filename']});
+  const saved=JSON.parse(await readFile(join(store.path,'result.json'),'utf8'));
+  expect(saved.selected_hashes.SB22).toBeUndefined();
+  await expect(BillStorage.discover_local(root,first.metadata.identity,new Set(['SB22']))).rejects.toThrow();
+  await store.put_result(result);
+  expect(await BillStorage.discover_local(root,first.metadata.identity,new Set(['SB22']))).toHaveLength(1);
+  const resultPath=join(store.path,'result.json');
+  const corrupted=JSON.parse(await readFile(resultPath,'utf8'));
+  corrupted.selected_hashes.SB22='wrong';
+  await writeFile(resultPath,JSON.stringify(corrupted));
+  await expect(BillStorage.discover_local(root,first.metadata.identity,new Set(['SB22']))).rejects.toThrow();
+ } finally { await rm(root,{recursive:true,force:true}); }
+});

@@ -105,7 +105,11 @@ export class BillStorage {
  }); }
  async list_attachments(codes?:Set<DocumentCode>):Promise<Attachment[]> { return this.locked(async()=>{
   const items=await this.saved_metadata(), filenames=new Set(items.map(m=>m.filename));
-  for(const m of (await this.observed()).values()) if((!codes||codes.has(m.code))&&!items.some(i=>i.code===m.code&&i.document_at>=m.document_at)) throw new StorageError(`Missing newest observed source: ${m.filename}`);
+  const saved=await json(join(this.path,'result.json'));
+  for(const m of (await this.observed()).values()) if(!codes||codes.has(m.code)) {
+   if(!items.some(i=>i.code===m.code&&i.document_at>=m.document_at)) throw new StorageError(`Missing newest observed source: ${m.filename}`);
+   if(!saved?.selected_hashes?.[m.code]) throw new StorageError(`Newest observed source has no validated bytes: ${m.filename}`);
+  }
   for(const path of (await names(join(this.path,'processed'))).filter(n=>n.endsWith('.json'))) {
    let m:DocumentMetadata; try { m=rules.parse_filename(path.replace(/\.json$/,'.pdf')); } catch { throw new StorageError(`Malformed processed document filename: ${path}`); }
    if((!codes||codes.has(m.code))&&!filenames.has(m.filename)) throw new StorageError(`Missing retained PDF: ${m.filename}`);
@@ -114,6 +118,7 @@ export class BillStorage {
   for(const m of items) {
    if(codes&&!codes.has(m.code)) continue;
    const record=await this.record(m); if(!record) throw new StorageError(`Missing or corrupt document metadata: ${m.filename}`);
+   if(saved?.selected_sources?.some((s:DocumentMetadata)=>same(s,m)) && saved.selected_hashes?.[m.code]!==record.content_hash) throw new StorageError(`Validated hash does not match retained source: ${m.filename}`);
    if(!Array.isArray(record.sources)||!record.sources.length||record.sources.some(s=>!s||typeof s.message_id!=='string'||!s.message_id||(s.part_id!=null&&typeof s.part_id!=='string'))) throw new StorageError(`Missing or corrupt source provenance: ${m.filename}`);
    await this.retained(m,record.content_hash); result.push({metadata:m,message_id:record.sources[0]!.message_id,part_id:record.sources[0]!.part_id});
   }
@@ -148,7 +153,7 @@ export class BillStorage {
   for(const [code,meta] of current) if(!selected.has(code)||meta.document_at>=selected.get(code)!.document_at) selected.set(code,meta);
   const hashes:Partial<Record<DocumentCode,string>>={};
   for(const [code,meta] of selected) {
-   const digest=same(current.get(code),meta)&&result.selected_hashes[code]||same(previous.get(code),meta)&&previous_payload?.selected_hashes?.[code];
+   const digest=same(current.get(code),meta) ? result.selected_hashes[code] : same(previous.get(code),meta) ? previous_payload?.selected_hashes?.[code] : undefined;
    if(digest) { try { await this.retained(meta,digest); hashes[code]=digest; } catch {} }
   }
   await this.write_json(path,{...result,selected_sources:[...selected.values()].sort((a,b)=>a.code.localeCompare(b.code)),selected_hashes:hashes});

@@ -131,7 +131,7 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
     const say = (text: string) => { if (!o.quiet) console.log(text); };
     say(`${tag('workbook')} ${path}`);
     say(`${tag('sheets')} ${sheets.length === years.length ? 'all: ' : ''}${sheets.map(n => paint(32, n)).join(' · ')}`);
-    if (o.check) { for (const { selected, label } of plan) showCheck(selected, fields, label); return 0; }
+    if (o.check) { for (const { selected, label } of plan) showCheck(selected, fields, label); return plan.some(({selected}) => selected.some(row => !row.cancelled && row.error)) ? 1 : 0; }
     const total = plan.reduce((sum, p) => sum + p.selected.length, 0);
     if (!total) { say(`${tag('sync')} No matching workbook rows.`); return 0; }
     const worth = (r: WorkbookRow) => !r.cancelled && !r.error && (o.force || verify || r.status !== 'Success');

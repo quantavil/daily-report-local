@@ -36,3 +36,11 @@ test('the check summary the dashboard parses keeps its shape and counts rows to 
   expect(lines.some(l => /^\[row 2\] SB 7546404 {2}missing {2}/.test(l))).toBe(true);
   expect(lines.at(-1)).toMatch(/^\[check\] 1 incomplete · 1 cancelled · 0 identity error\(s\) · 1 to sync · 3 rows$/);
 });
+
+test('check reports invalid scoped identities with a nonzero exit status', async () => {
+  const path = await fixture([['123', '07/10/2026', 'INMBD6']]);
+  const lines: string[] = [], original = console.log;
+  console.log = (text: string) => { lines.push(text); };
+  try { expect(await main(['-c', '-f', path])).toBe(1); } finally { console.log = original; }
+  expect(lines.some(line => line.includes('identity error(s)'))).toBe(true);
+});
