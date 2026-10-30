@@ -1,10 +1,14 @@
-/** Localhost dashboard: runs the CLI as a child process and serves its output; no parsing or workbook logic. */
+/** Localhost dashboard: runs the CLI as a child process, serves its output and a read-only view of report.db; no fetch, workflow or workbook logic. */
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { load_map, parse_map, type ExportMap } from './excel/export-map';
+import { CATALOG } from './icegate/schemas';
+import { gaps, list_bills, missing_iecs, open_db } from './store/db';
 
 const ROOT = join(import.meta.dir, '../..');
-const MODES = { check: ['-c'], sync: [], dry: ['-n'], verify: [] } as const;
+const MODES = { check: ['-c'], sync: [], dry: ['-n'], write: ['--excel'] } as const;
 type Mode = keyof typeof MODES;
-export interface RunRequest { mode?: string; scope?: string; fy?: string; sb?: string; rows?: string; force?: boolean; leoOnly?: boolean }
+export interface RunRequest { mode?: string }
 
 class Bad extends Error {}
 
@@ -12,20 +16,7 @@ class Bad extends Error {}
 export function toArgs(body: RunRequest): string[] {
   const mode = body.mode as Mode;
   if (!(mode in MODES)) throw new Bad('Unknown mode');
-  const args: string[] = [...MODES[mode]];
-  if (body.scope === 'latest') args.push('--latest');
-  else if (body.scope === 'fy') {
-    if (!/^[0-9]{4}-[0-9]{2}$/.test(body.fy ?? '')) throw new Bad('Year must look like 2026-27');
-    args.push('--fy', body.fy!);
-  } else if (body.scope !== 'all') throw new Bad('Unknown scope');
-  if (body.sb) { if (!/^[0-9]{7}$/.test(body.sb)) throw new Bad('SB must be seven digits'); args.push('--sb', body.sb); }
-  const rows = body.rows?.trim();
-  if (rows && !/^[0-9,\- ]+$/.test(rows)) throw new Bad('Rows look like 2,4-6');
-  if (mode === 'verify') { if (!rows) throw new Bad('Verify needs rows'); args.push('--verify-rows', rows); }
-  else if (rows) args.push('-r', rows);
-  if (body.force && (mode === 'sync' || mode === 'dry')) args.push('--force');
-  if (body.leoOnly) args.push('--leo-only');
-  return args;
+  return [...MODES[mode]];
 }
 
 interface Run { id: number; command: string; lines: string[]; running: boolean; exitCode: number | null; child?: Bun.Subprocess }
@@ -59,10 +50,27 @@ function start(args: string[]) {
   void Promise.all([pump(child.stdout, current), pump(child.stderr, current), child.exited]).then(([, , code]) => { current.exitCode = code; current.running = false; });
 }
 
+const dataDir = () => process.env.DAILY_REPORT_DATA_DIR ?? join(ROOT, 'data');
+const MAP_PATH = join(ROOT, 'export-map.json');
+
+/** What report.db holds: bills with their blank fields, plus IECs waiting for a name. Read-only. */
+export function dbView(path = join(dataDir(), 'report.db')) {
+  if (!existsSync(path)) return { total: 0, bills: [], missing_iecs: [] };
+  const db = open_db(path, true);
+  try {
+    const all = list_bills(db);
+    return {
+      total: all.length,
+      bills: all.slice(0, 500).map(b => ({ sb_no: b.sb_no, sb_date: b.sb_date, port_code: b.port_code, iec: b.iec, exporter: b.exporter, leo_date: b.leo_date, job_status: b.job_status, fetched_enquiry: b.fetched_enquiry, fetched_gatepass: b.fetched_gatepass, gaps: gaps(db, b) })),
+      missing_iecs: missing_iecs(db),
+    };
+  } finally { db.close(); }
+}
+
 const json = (data: unknown, status = 200) => Response.json(data, { status });
 
 /** Exported so tests need no listening socket. `begin` and `overview` are injectable to keep tests from spawning the CLI. */
-export async function handle(req: Request, begin: (args: string[]) => void = start, overview: () => Promise<string[]> = scan): Promise<Response> {
+export async function handle(req: Request, begin: (args: string[]) => void = start, overview: () => Promise<string[]> = scan, save_map: (map: ExportMap) => Promise<void> = map => Bun.write(MAP_PATH, JSON.stringify(map, null, 2) + '\n').then(() => {})): Promise<Response> {
   const url = new URL(req.url);
   // Anything on this machine's browser can reach localhost; only same-origin pages may drive it.
   if (url.hostname !== '127.0.0.1' && url.hostname !== 'localhost') return json({ error: 'Bad host' }, 403);
@@ -71,9 +79,16 @@ export async function handle(req: Request, begin: (args: string[]) => void = sta
     const from = Math.max(0, Number(url.searchParams.get('from')) || 0);
     return json({ id: run.id, command: run.command, running: run.running, exitCode: run.exitCode, lines: run.lines.slice(from) });
   }
+  if (req.method === 'GET' && url.pathname === '/api/db') return json(dbView());
+  if (req.method === 'GET' && url.pathname === '/api/fields') return json({ catalog: CATALOG, map: await load_map(MAP_PATH) });
   if (req.method === 'GET' && url.pathname === '/api/overview') return json({ lines: await overview() });
   if (req.method !== 'POST') return json({ error: 'Not found' }, 404);
   if (req.headers.get('origin') !== url.origin || !req.headers.get('content-type')?.startsWith('application/json')) return json({ error: 'Forbidden' }, 403);
+  if (url.pathname === '/api/map') {
+    if (run.running) return json({ error: 'A run is already in progress' }, 409);
+    try { await save_map(parse_map(await req.json())); return json({ ok: true }); }
+    catch (error) { return json({ error: error instanceof SyntaxError ? 'Bad JSON' : (error as Error).message }, 400); }
+  }
   if (url.pathname === '/api/stop') { run.child?.kill('SIGINT'); return json({ ok: true }); }
   if (url.pathname !== '/api/run') return json({ error: 'Not found' }, 404);
   if (run.running) return json({ error: 'A run is already in progress' }, 409);

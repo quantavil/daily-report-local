@@ -1,0 +1,20 @@
+{
+  "Shipping Bill Date": "bills.sb_date",
+  "Shipping Bill No": "bills.sb_no",
+  "Port Code / ICD Code": "bills.port_code",
+  "LEO Date": "bills.leo_date",
+  "Job No": "bills.job_no",
+  "Job Date": "bills.job_date",
+  "Exporter": "bills.exporter",
+  "IEC": "bills.iec",
+  "Inv No": "invoices.invoice_no",
+  "Inv Date": "invoices.invoice_date",
+  "Container No.": "containers.container_no",
+  "Container Size": "containers.size",
+  "Customs Seal Number": "containers.seal",
+  "EGM No": "containers.egm_no",
+  "EGM Date": "containers.egm_date",
+  "Type Shipment": "derived.type_shipment",
+  "Current Status": "bills.curr_status",
+  "Status": "derived.status"
+}

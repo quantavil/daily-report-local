@@ -3,10 +3,11 @@
 .cache/
 data/
 *.pdf
+# Local notes with real client identifiers
+FIELD-SOURCES.md
 
-# Excel Workbooks & Backups (track only the main report)
+# Generated report and backups (client data)
 *.xlsx
-!/Daily Working Report.xlsx
 *.bak*
 .~lock.*#
 
