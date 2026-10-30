@@ -3,8 +3,8 @@
 Creates every shipping bill from ICEGATE into a local SQLite database (`data/report.db`),
 fetches what each bill lacks, then rewrites `report.xlsx` from the database: one sheet per
 financial year (`FY 2023-24` … `FY 2026-27`), oldest bill first. The database is the product;
-the report is regenerated from it every run. No Gmail, no browser, no AI, no OCR, no manual
-data entry.
+the report is regenerated from it every run. Gmail provides a read-only gatepass fallback;
+there is no browser automation, AI, OCR or manual data entry in the application.
 
 ## Setup
 
@@ -44,7 +44,11 @@ computer, and does one run at a time.
 1. The Job Status report and the SB35 eGatepass search (one query per month) list the bills.
    Both create bills, so no workbook row or email is needed.
 2. The public SB enquiry fills LEO date, job, invoices and EGM containers.
-3. The eGatepass PDF (the only document read) fills container, size, seal, the IEC (`IEC/Br`) and the exporter. Each parsed PDF is kept in `data/gatepass/` (git-ignored) and re-parsed from there, never downloaded twice.
+3. The eGatepass PDF fills container, size, seal, the IEC (`IEC/Br`) and the exporter. If the ICEGATE gatepass is unavailable or cannot be read, Gmail is searched by SB number for PDF attachments, first in the bill’s financial year and then in later mail. Each candidate must pass the same bill number, date and port checks. Each accepted PDF is kept in `data/gatepass/` (git-ignored) and re-parsed from there.
+
+Each sync reports gatepass counts for ICEGATE, Gmail, saved PDFs, unavailable documents and errors, and lists the result beside each processed bill. Counts describe the current run; the original source of a reused saved PDF is not recorded.
+
+The Gmail fallback uses the existing `gws` CLI and a Gmail-authorized account. It reads messages and attachments without modifying mail. If `gws` or authorization is unavailable, the bill remains partial with a note; `--check` and `--excel` make no Gmail calls.
 
 ## The report
 
@@ -75,7 +79,7 @@ native Excel dates.
 
 Known limits:
 
-- The gatepass appears only once the portal has it; until then size and seal stay blank.
+- When neither ICEGATE nor Gmail has a matching, readable gatepass, its missing fields stay blank.
 - A gatepass with a non-standard container number or a conflicting identity is rejected, not guessed.
 - A bill the portal answers nothing for stays `Not found` on every run.
 

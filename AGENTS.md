@@ -14,14 +14,14 @@
   explicitly configured launch. If the personal profile is unavailable or
   signed out, stop and tell the user; never fall back to another profile.
 
-Creates every bill from ICEGATE alone into SQLite (`data/report.db`) with the `icegate` CLI,
-then regenerates `report.xlsx` from the database. SQLite is the product, Excel the residue:
+Creates bills from ICEGATE into SQLite (`data/report.db`) with the `icegate` CLI, using
+Gmail as a read-only gatepass fallback, then regenerates `report.xlsx` from the database. SQLite is the product, Excel the residue:
 nobody fills anything by hand. This is the maintenance contract; setup and usage live in `README.md`.
 
 ## Toolchain
 - Bun only: `bun install`, `bun run sync ...`, `bun run dev`, `bun test`, `bun check`.
 - Code in `src/ts/`, tests in `tests-ts/`. Split modules only for demonstrated need.
-- No AI, no OCR, no Gmail, no browser: unreadable or unsupported PDFs yield explicit rejected/error outcomes.
+- No AI, no OCR, no browser in the application: unreadable or unsupported PDFs yield explicit rejected/error outcomes. Gmail is a read-only gatepass fallback via `gws`.
 - `mupdf` is AGPL-3.0: fine for private local use; switch to `pdfjs-dist` if distributed.
 
 ## Design discipline
@@ -44,6 +44,7 @@ nobody fills anything by hand. This is the maintenance contract; setup and usage
 | `icegate/client.ts` | Spawns `icegate ... --json`; the only code that talks to ICEGATE; never sees credentials |
 | `icegate/schemas.ts` | valibot shapes of the JSON and the field catalog (database columns, export picker) |
 | `store/db.ts` | SQLite schema, first-non-empty-wins merge, IEC-name map, gaps, status; no ICEGATE or Excel code |
+| `gmail.ts` | Read-only Gmail search and PDF attachment retrieval through `gws` |
 | `gatepass/parse.ts` | Native layout via mupdf and rule-driven parsing of the SB35 gatepass; no network, no Excel |
 | `excel/export-map.ts` | Loads and validates `export-map.json` |
 | `excel/report.ts` | Writes `report.xlsx` from scratch on fflate (atomic rename); no business rules |
@@ -57,7 +58,7 @@ nobody fills anything by hand. This is the maintenance contract; setup and usage
   SB35 eGatepass (`ecopy search GATEPASS` for the SB date alone, since gatepass records carry the SB date, matched on `docNumber` = SB number. A batch run asks `plan()` first so a month with several SB dates is one search;
   its job number is a per-day counter, unrelated to the enquiry job number): container,
   size, seal, the IEC (`IEC/Br`) and the `3.Exporter` name. The gatepass is the only PDF read; there is no SB
-  e-copy. Each parsed gatepass is kept as `data/gatepass/<sb_date>_<sb_no>.pdf` (git-ignored, mode 0600); a rejected one is not. A kept PDF is parsed again instead of searching and downloading. Portal placeholders (`N.A.`, `-`) are blank.
+  e-copy. If ICEGATE cannot supply a valid PDF, Gmail searches the bill financial year then later mail; all candidate PDFs must pass the same identity validation. Each parsed gatepass is kept as `data/gatepass/<sb_date>_<sb_no>.pdf` (git-ignored, mode 0600); a rejected one is not. A kept PDF is parsed again instead of searching and downloading. Portal placeholders (`N.A.`, `-`) are blank.
 - Exporter name (database column and report column `Exporter`), first non-empty wins: the IEC-name map (`iec_names`: My IEC or user-approved
   via `iec-set`), then the gatepass exporter. This is the one human-approved lookup. The
   enquiry IEC is masked and never used. The IEC itself is Job Status first, else the gatepass `IEC/Br`;
@@ -69,7 +70,7 @@ nobody fills anything by hand. This is the maintenance contract; setup and usage
   `fetched_gatepass` stamp already records the parse), and the bill-level `egm_filed` and
   gateway EGM no/date (duplicates of the per-container `egm_no`/`egm_date`). Do not re-add
   them without a consumer. Job No and Job Date are kept and exported but do not gate `Success`.
-- A bill is complete when `store/db.ts` `gaps()` is empty; its status is then `Success`.
+- Per-run gatepass counts distinguish ICEGATE, Gmail, saved PDFs with unknown origin, unavailable documents and errors. A bill is complete when `store/db.ts` `gaps()` is empty; its status is then `Success`.
 
 ## Identity
 
@@ -85,7 +86,7 @@ nobody fills anything by hand. This is the maintenance contract; setup and usage
   change; then one gatepass query per month, a failed month is a warning), apply IEC names,
   then fetch for every bill that is not `Success` or `Cancelled` (never queried again unless `--force`). The enquiry runs when LEO
   date, invoice or container is missing; the gatepass when container, size, seal, IEC or exporter
-  is missing and the bill has a LEO date (no LEO, no SB35 gatepass). A bill the portal
+  is missing. ICEGATE is queried when a LEO date is known; Gmail fallback can also run without a LEO date. A bill the portal
   answers nothing for is not stamped as fetched, so it stays `Not found` on every run.
   Failures are reported on the bill and never block others.
 - Statuses: `Success`, `Partial`, `Cancelled`, `Not found` (not known to the portal),

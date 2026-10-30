@@ -6,15 +6,24 @@ import { join } from 'node:path';
 import { field_kind, type ExportMap } from './excel/export-map';
 import type { Sheet } from './excel/report';
 import { parse_gatepass } from './gatepass/parse';
+import { GmailError } from './gmail';
 import { month_end, NotReady, type IcegateClient } from './icegate/client';
 import { BILL_FIELDS, type BillField } from './icegate/schemas';
 import { bill_identity, DERIVED_LCL, fy_of } from './rules';
 import { apply_iec_names, clean, DataError, fill_bill, fill_containers, fill_invoices, gaps, get_bill, list_bills, list_containers, list_invoices, set_iec_name, shared_containers, stamp, status_of, type Bill, type BillKey, type Db } from './store/db';
 
 export type RowStatus = 'Success' | 'Partial' | 'Cancelled' | 'Not found' | 'Error';
-export interface Outcome { status: RowStatus; detail: string }
-export interface SyncOptions { workers: number; excel_only: boolean; from: string; to?: string; force?: boolean; gatepass_dir: string; on_progress?: (done: number, total: number, bill: BillKey, outcome: Outcome) => void }
+export type GatepassResult = 'saved' | 'icegate' | 'gmail' | 'unavailable' | 'error';
+export interface Outcome { status: RowStatus; detail: string; gatepass?: GatepassResult }
+export interface SyncOptions { workers: number; excel_only: boolean; from: string; to?: string; force?: boolean; gatepass_dir: string; gmail?: (bill: BillKey) => AsyncGenerator<Uint8Array>; on_progress?: (done: number, total: number, bill: BillKey, outcome: Outcome) => void }
 export interface SyncResult { results: [BillKey, Outcome][]; warnings: string[] }
+
+/** Counts describe this run; previously saved files have unknown original provenance. */
+export function gatepass_counts(outcomes: Outcome[]): Record<GatepassResult, number> {
+  const counts: Record<GatepassResult, number> = {icegate:0, gmail:0, saved:0, unavailable:0, error:0};
+  for (const outcome of outcomes) if (outcome.gatepass) counts[outcome.gatepass]++;
+  return counts;
+}
 
 const ENQUIRY_MODELS = ['sbDetailsModel', 'currentStatusModel', 'roslStatusModel', 'gatewayEgmStatusModel'] as const;
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -73,21 +82,38 @@ async function enrich(db: Db, client: IcegateClient, k: BillKey): Promise<boolea
 }
 
 /** Parse the SB35 gatepass: containers, the IEC and, for a bill without an IEC name, the exporter. A kept PDF is parsed again without the portal; otherwise search, download and keep it. Returns a note when there is nothing to parse yet. */
-async function gatepass(db: Db, client: IcegateClient, k: BillKey, keep: string): Promise<string> {
+async function gatepass(db: Db, client: IcegateClient, k: BillKey, keep: string, gmail?: (bill: BillKey) => AsyncGenerator<Uint8Array>, portal = true): Promise<GatepassResult> {
   const kept = join(keep, `${k.sb_date}_${k.sb_no}.pdf`);
-  let bytes: Uint8Array;
-  if (existsSync(kept)) bytes = new Uint8Array(await readFile(kept));
-  else {
-    const record = (await client.gatepassSearch({ location: k.port_code, sb_no: k.sb_no, sb_date: k.sb_date })).filter(r => r.irn).at(-1);
-    if (!record) return 'no gatepass yet';
-    const dir = await mkdtemp(join(tmpdir(), 'daily-report-'));
+  let bytes: Uint8Array | undefined;
+  let pass: ReturnType<typeof parse_gatepass> | undefined;
+  let portalError: unknown;
+  let source: GatepassResult = 'saved';
+  if (existsSync(kept)) {
+    bytes = new Uint8Array(await readFile(kept));
+    pass = parse_gatepass(bytes, k);
+  } else {
     try {
-      const file = join(dir, 'gatepass.pdf');
-      await client.gatepassDownload(record, file);
-      bytes = new Uint8Array(await readFile(file));
-    } finally { await rm(dir, { recursive: true, force: true }); }
+      const record = portal ? (await client.gatepassSearch({ location: k.port_code, sb_no: k.sb_no, sb_date: k.sb_date })).filter(r => r.irn).at(-1) : undefined;
+      if (record) {
+        const dir = await mkdtemp(join(tmpdir(), 'daily-report-'));
+        try {
+          const file = join(dir, 'gatepass.pdf');
+          await client.gatepassDownload(record, file);
+          const candidate = new Uint8Array(await readFile(file));
+          pass = parse_gatepass(candidate, k); bytes = candidate; source = 'icegate';
+        } finally { await rm(dir, { recursive: true, force: true }); }
+      }
+    } catch (error) { portalError = error; }
+    if (!pass && gmail) {
+      for await (const candidate of gmail(k)) {
+        try { pass = parse_gatepass(candidate, k); bytes = candidate; source = 'gmail'; break; } catch { /* Try the next attachment. */ }
+      }
+    }
+    if (!pass || !bytes) {
+      if (portalError) throw portalError;
+      return 'unavailable';
+    }
   }
-  const pass = parse_gatepass(bytes, k);
   if (!existsSync(kept)) { // the parsed PDF is kept as the source of the stored fields
     await mkdir(keep, { recursive: true, mode: 0o700 });
     await writeFile(kept, bytes, { mode: 0o600 }); await chmod(kept, 0o600);
@@ -95,30 +121,31 @@ async function gatepass(db: Db, client: IcegateClient, k: BillKey, keep: string)
   fill_bill(db, k, { iec: pass.iec, exporter: pass.exporter }); // first non-empty wins: the Job Status IEC and an IEC-derived name are kept
   fill_containers(db, k, pass.containers);
   stamp(db, k, 'gatepass');
-  return '';
+  return source;
 }
 
 /** Fetch what one bill is still missing and judge it. Failures are reported on the bill, never thrown. */
-async function work(db: Db, client: IcegateClient | null, k: BillKey, keep: string, force = false): Promise<Outcome> {
+async function work(db: Db, client: IcegateClient | null, k: BillKey, keep: string, force = false, gmail?: (bill: BillKey) => AsyncGenerator<Uint8Array>): Promise<Outcome> {
   const notes: string[] = [], errors: string[] = [];
+  let gatepassResult: GatepassResult | undefined;
   const before = get_bill(db, k);
   let known = !!(before?.fetched_job || before?.fetched_enquiry);
   if (client) {
     if (force || wants(gaps(db, k), 'leo_date', 'invoice', 'container')) {
       try { known = (await enrich(db, client, k)) || known; } catch (error) { errors.push(`enquiry: ${message(error)}`); }
     }
-    if (status_of(db, k) !== 'Cancelled' && known && get_bill(db, k)?.leo_date && (force || wants(gaps(db, k), 'container', 'size', 'seal', 'exporter', 'iec'))) { // no LEO, no SB35 gatepass
-      try { const note = await gatepass(db, client, k, keep); if (note) notes.push(note); }
-      catch (error) { if (error instanceof NotReady) notes.push('gatepass not ready'); else errors.push(`gatepass: ${message(error)}`); }
+    if (status_of(db, k) !== 'Cancelled' && known && (get_bill(db, k)?.leo_date || gmail) && (force || wants(gaps(db, k), 'container', 'size', 'seal', 'exporter', 'iec'))) {
+      try { gatepassResult = await gatepass(db, client, k, keep, gmail, !!get_bill(db, k)?.leo_date); if (gatepassResult === 'unavailable') notes.push('no matching gatepass'); }
+      catch (error) { gatepassResult = error instanceof NotReady ? 'unavailable' : 'error'; if (error instanceof NotReady) notes.push('gatepass not ready'); else if (error instanceof GmailError) notes.push(error.message); else errors.push(`gatepass: ${message(error)}`); }
     }
   }
   const status = status_of(db, k);
-  if (status === 'Cancelled') return { status, detail: 'Cancelled at the portal' };
+  if (status === 'Cancelled') return { status, detail: 'Cancelled at the portal', gatepass: gatepassResult };
   const missing = gaps(db, k);
-  if (!missing.length) return { status: 'Success', detail: 'All fields filled' };
-  if (errors.length) return { status: 'Error', detail: errors.join('; ') };
+  if (!missing.length) return { status: 'Success', detail: 'All fields filled', gatepass: gatepassResult };
+  if (errors.length) return { status: 'Error', detail: errors.join('; '), gatepass: gatepassResult };
   if (status === 'Not found') return { status, detail: 'Not known to the portal' };
-  return { status: 'Partial', detail: [`missing: ${missing.join(', ')}`, ...notes].join('; ') };
+  return { status: 'Partial', detail: [`missing: ${missing.join(', ')}`, ...notes].join('; '), gatepass: gatepassResult };
 }
 
 /** Bills that can still gain something: not complete and not cancelled, unless the run is forced. */
@@ -131,7 +158,7 @@ export async function sync(db: Db, client: IcegateClient, o: SyncOptions): Promi
   if (!o.excel_only) client.plan(todo.filter(k => o.force || wants(gaps(db, k), 'container', 'size', 'seal', 'exporter', 'iec')).map(k => k.sb_date));
   const results: [BillKey, Outcome][] = [];
   await pool(todo, o.workers, async k => {
-    const outcome = await work(db, o.excel_only ? null : client, k, o.gatepass_dir, o.force);
+    const outcome = await work(db, o.excel_only ? null : client, k, o.gatepass_dir, o.force, o.gmail);
     results.push([k, outcome]);
     o.on_progress?.(results.length, todo.length, k, outcome);
   });

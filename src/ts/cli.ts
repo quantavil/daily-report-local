@@ -6,10 +6,11 @@ import pkg from '../../package.json';
 import { load_map } from './excel/export-map';
 import { write_report } from './excel/report';
 import { command_client } from './icegate/client';
+import { gmail_gatepasses } from './gmail';
 import { CATALOG } from './icegate/schemas';
 import { parse_date } from './rules';
 import { gaps, list_bills, missing_iecs, open_db, set_iec_name, status_of, type BillKey, type Db } from './store/db';
-import { report_sheets, sync, type RowStatus } from './workflow';
+import { gatepass_counts, report_sheets, sync, type RowStatus } from './workflow';
 
 export const ROOT = join(import.meta.dir, '../..');
 
@@ -127,14 +128,16 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
       if (process.stderr.isTTY) process.stderr.write(`\r${tag('sync')} ${done}/${count}`);
       else if (!process.stdout.isTTY) console.log(`[progress] ${done}/${count} SB ${k.sb_no} ${outcome.status}`);
     };
-    const { results, warnings } = await sync(db, command_client(), { workers, excel_only: !!o.excel, force: !!o.force, from, to: o.to ? parse_date(o.to) : undefined, gatepass_dir: join(dataDir, 'gatepass'), on_progress });
+    const { results, warnings } = await sync(db, command_client(), { workers, excel_only: !!o.excel, force: !!o.force, from, to: o.to ? parse_date(o.to) : undefined, gatepass_dir: join(dataDir, 'gatepass'), gmail: gmail_gatepasses, on_progress });
     if (!o.quiet && process.stderr.isTTY) process.stderr.write('\r\x1b[K');
     for (const w of warnings) console.log(`${tag('warn')} ${w}`);
     const counts: Partial<Record<RowStatus, number>> = {};
     for (const [k, outcome] of results) {
       counts[outcome.status] = (counts[outcome.status] ?? 0) + 1;
-      if (o.quiet ? outcome.status === 'Error' : true) console.log(line(k, paint(STATUS_COLOR[outcome.status], outcome.status.padEnd(9)), clip(outcome.detail, !!o.verbose || !process.stdout.isTTY)));
+      if (o.quiet ? outcome.status === 'Error' : true) console.log(line(k, paint(STATUS_COLOR[outcome.status], outcome.status.padEnd(9)), clip([outcome.detail, outcome.gatepass ? `gatepass: ${outcome.gatepass === 'saved' ? 'saved PDF (origin unknown)' : outcome.gatepass}` : ''].filter(Boolean).join('; '), !!o.verbose || !process.stdout.isTTY)));
     }
+    const sources = gatepass_counts(results.map(([, outcome]) => outcome));
+    if (Object.values(sources).some(Boolean)) console.log(`${tag('gatepass')} ICEGATE ${sources.icegate} · Gmail ${sources.gmail} · saved PDF (origin unknown) ${sources.saved} · unavailable ${sources.unavailable} · errors ${sources.error}`);
     const sheets = report_sheets(db, map), total = sheets.reduce((n, s) => n + s.rows.length, 0);
     if (!o['dry-run']) await write_report(path, sheets);
     const summary = (Object.keys(STATUS_COLOR) as RowStatus[]).filter(s => counts[s]).map(s => `${paint(STATUS_COLOR[s], s)} ${counts[s]}`).join(' · ');

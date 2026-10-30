@@ -4,8 +4,9 @@ import { writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DEFAULT_MAP } from '../src/ts/excel/export-map';
+import { GmailError } from '../src/ts/gmail';
 import { IcegateError, NotReady, type IcegateClient } from '../src/ts/icegate/client';
-import { cells_for, report_sheets, sync } from '../src/ts/workflow';
+import { cells_for, report_sheets, sync, gatepass_counts } from '../src/ts/workflow';
 import { fill_bill, fill_containers, get_bill, list_bills, open_db, set_iec_name, shared_containers } from '../src/ts/store/db';
 import { pdf } from './fixture';
 
@@ -32,7 +33,7 @@ function fake(over: Partial<IcegateClient> = {}): IcegateClient & { calls: strin
   };
 }
 const keep = mkdtempSync(join(tmpdir(), 'gatepass-'));
-const opts = { workers: 2, excel_only: false, force: false, from: '2026-10-01', gatepass_dir: keep };
+const opts = { gmail: undefined as undefined | ((bill: typeof k) => AsyncGenerator<Uint8Array>), workers: 2, excel_only: false, force: false, from: '2026-10-01', gatepass_dir: keep };
 const run = (client: IcegateClient, extra: Partial<typeof opts> = {}, db = open_db(':memory:')) => sync(db, client, { ...opts, gatepass_dir: mkdtempSync(join(tmpdir(), 'gatepass-')), ...extra }).then(r => ({ db, ...r }));
 const named = (db: ReturnType<typeof open_db>) => set_iec_name(db, '0123456789', 'ACME EXPORTS', 'my-iec');
 
@@ -110,6 +111,50 @@ describe('sync', () => {
     expect(results[0]![1]).toMatchObject({ status: 'Partial' });
     expect(results[0]![1].detail).toContain('gatepass not ready');
     expect(get_bill(db, k)!.exporter).toBe('');
+  });
+  test('gatepass counts distinguish new sources, saved copies, misses and errors', () => {
+    expect(gatepass_counts([{status:'Success',detail:'',gatepass:'gmail'}, {status:'Partial',detail:'',gatepass:'unavailable'}, {status:'Success',detail:'',gatepass:'saved'}, {status:'Error',detail:'',gatepass:'error'}])).toEqual({icegate:0,gmail:1,saved:1,unavailable:1,error:1});
+  });
+  test('reports the gatepass source and unavailable result per bill', async () => {
+    const portal = await run(fake());
+    expect(portal.results[0]![1].gatepass).toBe('icegate');
+    const gmail = async function* () { yield GATEPASS; };
+    const mail = await run(fake({gatepassSearch: async () => []}), {gmail});
+    expect(mail.results[0]![1].gatepass).toBe('gmail');
+    const missing = await run(fake({gatepassSearch: async () => []}));
+    expect(missing.results[0]![1].gatepass).toBe('unavailable');
+  });
+  test('Gmail fallback skips mismatched PDFs and uses a matching gatepass when ICEGATE has no IRN', async () => {
+    const wrong = pdf([['SB No',20,760],['9999999',100,760],['SB Date',200,760],['07/10/2026',280,760],['Port Code',400,760],['INMBD6',480,760], ...TABLE]);
+    const gmail = async function* () { yield wrong; yield GATEPASS; };
+    const {db, results} = await run(fake({gatepassSearch: async () => []}), {gmail});
+    expect(results[0]![1].status).toBe('Success');
+    expect(get_bill(db,k)!.exporter).toBe('GATEPASS EXPORTS LTD');
+  });
+  test('Gmail can supply a gatepass when the enquiry has no LEO date', async () => {
+    const gmail = async function* () { yield GATEPASS; };
+    const client = fake({enquiry: async () => ({...EMPTY, sbDetailsModel:[{}]})});
+    const {db} = await run(client, {gmail});
+    expect(get_bill(db,k)!.exporter).toBe('GATEPASS EXPORTS LTD');
+    expect(client.calls).not.toContain('search');
+  });
+  test('Gmail fallback recovers when the portal download fails', async () => {
+    const gmail = async function* () { yield GATEPASS; };
+    const {results} = await run(fake({gatepassDownload: async () => { throw new NotReady('retry later'); }}), {gmail});
+    expect(results[0]![1].status).toBe('Success');
+  });
+  test('Gmail candidates that do not match the bill are not kept', async () => {
+    const gmail = async function* () { yield pdf([['SB No',20,760],['9999999',100,760]]); };
+    const dir = mkdtempSync(join(tmpdir(), 'gatepass-rejected-'));
+    const {results} = await run(fake({gatepassSearch: async () => []}), {gmail, gatepass_dir:dir});
+    expect(results[0]![1].status).toBe('Partial');
+    expect(existsSync(join(dir, '2026-10-07_7546404.pdf'))).toBe(false);
+  });
+  test('Gmail failure is reported without exposing message content', async () => {
+    const gmail = async function* (): AsyncGenerator<Uint8Array> { throw new GmailError('Gmail lookup failed'); };
+    const {results} = await run(fake({gatepassSearch: async () => []}), {gmail});
+    expect(results[0]![1].detail).toContain('Gmail lookup failed');
+    expect(results[0]![1].status).toBe('Partial');
   });
   test('an enquiry failure is an Error on that bill only', async () => {
     const ok = fake().enquiry;
