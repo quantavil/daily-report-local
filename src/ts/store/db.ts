@@ -72,7 +72,7 @@ export function identity_conflict(db: Db, k: BillKey): string | null {
   return have && (have.sb_date !== k.sb_date || have.port_code !== k.port_code) ? `SB ${k.sb_no} in FY ${fy_of(k.sb_date)} is already stored with date ${have.sb_date} and port ${have.port_code}` : null;
 }
 
-/** First non-empty value wins: later sources only fill blanks. Creates the bill when new. */
+/** First non-empty value wins except current portal status, which updates when non-empty. */
 export function fill_bill(db: Db, k: BillKey, values: Record<string, string>): void {
   const cols = Object.keys(values).map(ident);
   for (const c of cols) if (!BILL_COLS.includes(c)) throw new Error(`Unknown bill field ${c}`);
@@ -81,7 +81,7 @@ export function fill_bill(db: Db, k: BillKey, values: Record<string, string>): v
     const conflict = identity_conflict(db, k);
     if (conflict) throw new DataError(conflict);
     if (!cols.length) return;
-    const set = cols.map(c => `${c} = COALESCE(NULLIF(${c}, ''), ?)`).join(', ');
+    const set = cols.map(c => c === 'curr_status' ? `${c} = COALESCE(NULLIF(?, ''), ${c})` : `${c} = COALESCE(NULLIF(${c}, ''), ?)`).join(', ');
     db.query(`UPDATE bills SET ${set} WHERE ${where}`).run(...cols.map(c => clean(values[c], KIND.get(c))), ...key_params(k));
   })();
 }

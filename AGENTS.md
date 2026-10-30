@@ -43,7 +43,7 @@ nobody fills anything by hand. This is the maintenance contract; setup and usage
 | `models.ts` | Layout types |
 | `icegate/client.ts` | Spawns `icegate ... --json`; the only code that talks to ICEGATE; never sees credentials |
 | `icegate/schemas.ts` | valibot shapes of the JSON and the field catalog (database columns, export picker) |
-| `store/db.ts` | SQLite schema, first-non-empty-wins merge, IEC-name map, gaps, status; no ICEGATE or Excel code |
+| `store/db.ts` | SQLite schema, merge and current-status refresh, IEC-name map, gaps, status; no ICEGATE or Excel code |
 | `gmail.ts` | Read-only Gmail search and PDF attachment retrieval through `gws` |
 | `gatepass/parse.ts` | Native layout via mupdf and rule-driven parsing of the SB35 gatepass; no network, no Excel |
 | `excel/export-map.ts` | Loads and validates `export-map.json` |
@@ -63,7 +63,7 @@ nobody fills anything by hand. This is the maintenance contract; setup and usage
   via `iec-set`), then the gatepass exporter. This is the one human-approved lookup. The
   enquiry IEC is masked and never used. The IEC itself is Job Status first, else the gatepass `IEC/Br`;
   a gap in it triggers a gatepass fetch like the other gatepass fields.
-- Merge rule: first non-empty value wins; later sources only fill blanks. Dates are stored
+- Merge rule: first non-empty value wins except current portal status, which is updated by a later non-empty enquiry response. Dates are stored
   as ISO. Containers, sizes and seals are ordered records keyed by container number.
 - Deliberately not stored (no report column, nothing reads them): the enquiry's e-document
   list, portal error-text fields (job, gateway, EGM), the gatepass IRN and PDF hash (the
@@ -77,7 +77,7 @@ nobody fills anything by hand. This is the maintenance contract; setup and usage
 - The database key is financial year + SB number (`fy` from the SB date), never duplicated;
   a second date or port for the same key is an Error on that bill, never merged. Identity is
   built by `rules.ts` `bill_identity`; an invalid row from a portal list is skipped and blocks
-  no other bill. Cancellation is read from the portal's current status (`CANCELLED_STATUS`),
+  no other bill. Cancellation is derived from the portal's current status (`CANCELLED_STATUS`), including `Purge after 30 days`,
   never inferred from anything else.
 
 ## Run semantics

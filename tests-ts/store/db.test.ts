@@ -66,6 +66,19 @@ describe('store', () => {
     fill_bill(db, unseen, {});
     expect([k, cancelled, seen, unseen].map(b => status_of(db, b))).toEqual(['Success', 'Cancelled', 'Partial', 'Not found']);
   });
+  test('the portal status Purge after 30 days is cancelled', () => {
+    const db = open_db(':memory:');
+    fill_bill(db, k, { curr_status: 'Purge after 30 days' });
+    expect(status_of(db, k)).toBe('Cancelled');
+  });
+  test('a newer non-empty portal status replaces an older one', () => {
+    const db = open_db(':memory:');
+    fill_bill(db, k, { curr_status: 'In progress' });
+    fill_bill(db, k, { curr_status: 'Purge after 30 days' });
+    fill_bill(db, k, { curr_status: 'N.A.' });
+    expect(get_bill(db, k)!.curr_status).toBe('Purge after 30 days');
+    expect(status_of(db, k)).toBe('Cancelled');
+  });
   test('an older database keeps its IEC names except the retired workbook seed', () => {
     const path = join(mkdtempSync(join(tmpdir(), 'daily-report-')), 'report.db'), old = new Database(path, { create: true });
     old.run("CREATE TABLE iec_names (iec TEXT PRIMARY KEY, name TEXT NOT NULL, source TEXT NOT NULL)");

@@ -71,10 +71,14 @@ rebuilt from the database each run, so never edit it by hand.
 
 The sheets follow the old daily report: dark-blue header, alternating white and pale-grey rows, thin borders, frozen header, filter, green tabs, widths fitted to the content.
 
-`Success` and `Cancelled` bills are never queried again; `--force` queries them anyway (blanks are still the only thing filled).
+`Success` and `Cancelled` bills are never queried again; `--force` queries them anyway. A new non-empty portal status replaces the previous status; other fields only fill blanks.
 
 A bill is `Success` when IEC, exporter, invoice, LEO date, container, size and seal are known.
-`Cancelled` comes from the portal's current status. Dates are stored as ISO and written as
+`Cancelled` is derived from the portal's current status, including `Purge after 30 days`.
+`Partial` means a known bill is missing one or more required fields; `Not found` means no
+successful Job Status or enquiry lookup has confirmed it. Status is calculated from the
+stored fields each time, and run errors are reported separately rather than stored as a status.
+Dates are stored as ISO and written as
 native Excel dates.
 
 Known limits:

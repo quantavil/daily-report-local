@@ -2,8 +2,8 @@
 export const EXCEL_DATE_NUMBER_FORMAT = 'dd\\-mmm\\-yyyy';
 /** Portal placeholders that mean "no value". */
 export const BLANK_VALUES = ['', '-', 'N.A.', 'N/A', 'NA', 'NONE', 'NULL'];
-/** The enquiry's current status of a cancelled shipping bill. */
-export const CANCELLED_STATUS = /\bcancel/i;
+/** Portal statuses treated as cancelled in the report. */
+export const CANCELLED_STATUS = /\bcancel|^purge after 30 days$/i;
 export const DERIVED_LCL = 'LCL (derived)';
 export const LABELS: Record<string,RegExp> = {
  exporter:/^3\s*\.\s*Exporter$/i, iec:/^IEC\s*\/\s*Br\.?$/i,

@@ -140,7 +140,7 @@ async function work(db: Db, client: IcegateClient | null, k: BillKey, keep: stri
     }
   }
   const status = status_of(db, k);
-  if (status === 'Cancelled') return { status, detail: 'Cancelled at the portal', gatepass: gatepassResult };
+  if (status === 'Cancelled') return { status, detail: 'Classified as cancelled from portal status', gatepass: gatepassResult };
   const missing = gaps(db, k);
   if (!missing.length) return { status: 'Success', detail: 'All fields filled', gatepass: gatepassResult };
   if (errors.length) return { status: 'Error', detail: errors.join('; '), gatepass: gatepassResult };
