@@ -3,7 +3,7 @@ import { Database } from 'bun:sqlite';
 import { chmodSync, copyFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { BILL_FIELDS, OWN_FIELDS } from '../icegate/schemas';
-import { BLANK_VALUES, CANCELLED_STATUS, fy_of, LCL_WINDOW_DAYS, parse_date } from '../rules';
+import { BLANK_VALUES, CANCELLED_STATUS, fy_of, LCL_WINDOW_DAYS, parse_date, same_box_by_seal } from '../rules';
 
 export interface BillKey { sb_no: string; sb_date: string; port_code: string }
 export type Bill = BillKey & Record<string, string>;
@@ -51,6 +51,7 @@ export function open_db(path: string, readonly = false): Db {
     })();
     if (path !== ':memory:') chmodSync(path, 0o600);
   }
+  db.run('CREATE TABLE IF NOT EXISTS manual (fy TEXT NOT NULL, sb_no TEXT NOT NULL, PRIMARY KEY (fy, sb_no))'); // outside the rebuild, like iec_names
   return db;
 }
 
@@ -100,11 +101,22 @@ export function fill_invoices(db: Db, k: BillKey, rows: { invoice_no: string; in
 }
 
 export interface ContainerIn { container_no: string; size?: string; seal?: string; egm_no?: string; egm_date?: string }
-/** Keyed by container number: new containers are appended, known ones only gain blank fields. */
+/** Keyed by container number: new containers are appended, known ones only gain blank fields. A gatepass container and an EGM container with the same seal (`same_box_by_seal`) are one box under the EGM number, whichever arrives first. */
 export function fill_containers(db: Db, k: BillKey, rows: ContainerIn[]): void {
   db.transaction(() => {
-    for (const r of rows) {
-      if (!clean(r.container_no)) continue;
+    for (const row of rows) {
+      const no = clean(row.container_no), seal = clean(row.seal);
+      if (!no) continue;
+      let r = row;
+      const known = db.query(`SELECT container_no, seal, egm_no FROM containers WHERE ${where}`).all(...key_params(k)) as { container_no: string; seal: string; egm_no: string }[];
+      if (!known.some(c => c.container_no === no)) {
+        const twins = known.filter(c => same_box_by_seal(c.seal, seal) && !!c.egm_no !== !!clean(r.egm_no));
+        if (twins.length === 1) {
+          const twin = twins[0]!;
+          if (!twin.egm_no) db.query(`UPDATE containers SET container_no = ? WHERE ${where} AND container_no = ?`).run(no, ...key_params(k), twin.container_no);
+          else r = { ...r, container_no: twin.container_no };
+        }
+      }
       const next = (db.query(`SELECT COALESCE(MAX(position) + 1, 0) AS n FROM containers WHERE ${where}`).get(...key_params(k)) as { n: number }).n;
       db.query(`INSERT INTO containers (fy, sb_no, position, container_no, size, seal, egm_no, egm_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT DO UPDATE SET ${['size', 'seal', 'egm_no', 'egm_date'].map(c => `${c} = COALESCE(NULLIF(${c}, ''), excluded.${c})`).join(', ')}`)
@@ -116,6 +128,12 @@ export function fill_containers(db: Db, k: BillKey, rows: ContainerIn[]): void {
 export function set_iec_name(db: Db, iec: string, name: string, source: 'my-iec' | 'user'): void {
   db.query(`INSERT INTO iec_names VALUES (?, ?, ?) ON CONFLICT DO UPDATE SET name = excluded.name, source = excluded.source
     WHERE excluded.source = 'user' OR iec_names.source <> 'user'`).run(iec, name, source);
+}
+
+/** Closes a bill by hand: it keeps its gaps but is never queried again unless the run is forced. */
+export function mark_manual(db: Db, k: BillKey): void {
+  if (!get_bill(db, k)) throw new Error(`No bill ${k.sb_no} on ${k.sb_date}`); // no row, no flag
+  db.query('INSERT OR IGNORE INTO manual VALUES (?, ?)').run(...key_params(k));
 }
 
 export function get_bill(db: Db, k: BillKey): Bill | null { return db.query(`SELECT * FROM bills WHERE ${where}`).get(...key_params(k)) as Bill | null; }
@@ -145,12 +163,13 @@ export function apply_iec_names(db: Db): void {
 /** IECs on bills that have no name yet, with how many bills wait for it. */
 export const missing_iecs = (db: Db) => db.query(`SELECT iec, COUNT(*) AS bills FROM bills WHERE exporter = '' AND iec <> '' AND iec NOT IN (SELECT iec FROM iec_names) GROUP BY iec ORDER BY bills DESC, iec`).all() as { iec: string; bills: number }[];
 
-type BillStatus = 'Success' | 'Partial' | 'Cancelled' | 'Not found';
-/** Judged from what the database holds: cancelled by the portal, complete, never seen by the portal, or still missing fields. */
+type BillStatus = 'Success' | 'Partial' | 'Cancelled' | 'Manual' | 'Not found';
+/** Judged from what the database holds: cancelled by the portal, complete, closed by hand, never seen by the portal, or still missing fields. */
 export function status_of(db: Db, k: BillKey): BillStatus {
   const bill = get_bill(db, k);
   if (bill && CANCELLED_STATUS.test(bill.curr_status ?? '')) return 'Cancelled';
   if (!gaps(db, k).length) return 'Success';
+  if (db.query(`SELECT 1 FROM manual WHERE ${where}`).get(...key_params(k))) return 'Manual';
   return bill && (bill.fetched_job || bill.fetched_enquiry) ? 'Partial' : 'Not found';
 }
 

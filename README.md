@@ -25,6 +25,7 @@ bun run sync --excel            # only rewrite report.xlsx from what report.db h
 bun run sync --from 2025-04-01  # discover bills from that month on
 bun run sync iec-missing        # IECs that still need an exporter name
 bun run sync iec-set IEC "NAME" # approve the exporter name for an IEC
+bun run sync mark-manual SBNO DATE # close a bill by hand: never queried again
 bun run sync fields             # fields that can be exported
 ```
 
@@ -68,15 +69,15 @@ rebuilt from the database each run, so never edit it by hand.
 | EGM No / EGM Date | public SB enquiry, per container |
 | Type Shipment (derived) | `LCL` when a container is shared by bills of different exporters dated within 14 days, else blank |
 | Current Status | the portal's own status text |
-| Status | `Success`, `Partial`, `Cancelled` or `Not found` |
+| Status | `Success`, `Partial`, `Cancelled`, `Manual` or `Not found` |
 
 The sheets follow the old daily report: dark-blue header, alternating white and pale-grey rows, thin borders, frozen header, filter, green tabs, widths fitted to the content.
 
-`Success` and `Cancelled` bills are never queried again; `--force` queries them anyway. A new non-empty portal status replaces the previous status; other fields only fill blanks.
+`Success`, `Cancelled` and `Manual` bills are never queried again; `--force` queries them anyway. A new non-empty portal status replaces the previous status; other fields only fill blanks.
 
 A bill is `Success` when IEC, exporter, invoice, LEO date, container, size and seal are known.
 `Cancelled` is derived from the portal's current status, including `Purge after 30 days`.
-`Partial` means a known bill is missing one or more required fields; `Not found` means no
+`Manual` is a bill closed by hand with `mark-manual` because a field cannot be obtained; it keeps its gaps and shows `Manual`. `Partial` means a known bill is missing one or more required fields; `Not found` means no
 successful Job Status or enquiry lookup has confirmed it. Status is calculated from the
 stored fields each time, and run errors are reported separately rather than stored as a status.
 Dates are stored as ISO and written as

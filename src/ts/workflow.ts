@@ -12,7 +12,7 @@ import { BILL_FIELDS, type BillField } from './icegate/schemas';
 import { bill_identity, DERIVED_LCL, fy_of, parse_date, plausible_sb_date } from './rules';
 import { apply_iec_names, clean, DataError, fill_bill, fill_containers, fill_invoices, gaps, get_bill, list_bills, list_containers, lcl_key, list_invoices, set_iec_name, shared_containers, stamp, status_of, type Bill, type BillKey, type Db } from './store/db';
 
-export type RowStatus = 'Success' | 'Partial' | 'Cancelled' | 'Not found' | 'Error';
+export type RowStatus = 'Success' | 'Partial' | 'Cancelled' | 'Manual' | 'Not found' | 'Error';
 export type GatepassResult = 'saved' | 'icegate' | 'gmail' | 'unavailable' | 'error';
 export interface Outcome { status: RowStatus; detail: string; gatepass?: GatepassResult }
 export interface SyncOptions { workers: number; excel_only: boolean; from: string; to?: string; force?: boolean; gatepass_dir: string; gmail?: (bill: BillKey) => AsyncGenerator<Uint8Array>; on_progress?: (done: number, total: number, bill: BillKey, outcome: Outcome) => void }
@@ -168,14 +168,15 @@ async function work(db: Db, client: IcegateClient | null, k: BillKey, keep: stri
   const status = status_of(db, k);
   if (status === 'Cancelled') return { status, detail: 'Classified as cancelled from portal status', gatepass: gatepassResult };
   const missing = gaps(db, k);
+  if (status === 'Manual') return { status, detail: `closed by hand; missing: ${missing.join(', ')}`, gatepass: gatepassResult };
   if (!missing.length) return { status: 'Success', detail: 'All fields filled', gatepass: gatepassResult };
   if (errors.length) return { status: 'Error', detail: errors.join('; '), gatepass: gatepassResult };
   if (status === 'Not found') return { status, detail: 'Not known to the portal' };
   return { status: 'Partial', detail: [`missing: ${missing.join(', ')}`, ...notes].join('; '), gatepass: gatepassResult };
 }
 
-/** Bills that can still gain something: not complete and not cancelled, unless the run is forced. */
-const pending = (db: Db, b: Bill, force = false) => { const s = status_of(db, b); return force || (s !== 'Success' && s !== 'Cancelled'); };
+/** Bills that can still gain something: not complete, cancelled or closed by hand, unless the run is forced. */
+const pending = (db: Db, b: Bill, force = false) => { const s = status_of(db, b); return force || (s !== 'Success' && s !== 'Cancelled' && s !== 'Manual'); };
 
 export async function sync(db: Db, client: IcegateClient, o: SyncOptions): Promise<SyncResult> {
   const warnings = o.excel_only ? [] : await discover(db, client, o.from, o.to, o.gmail, o.gatepass_dir);

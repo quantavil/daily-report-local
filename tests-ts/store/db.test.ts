@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { clean, DataError, fill_bill, fill_containers, fill_invoices, gaps, get_bill, list_containers, open_db, set_iec_name, status_of } from '../../src/ts/store/db';
+import { clean, DataError, fill_bill, fill_containers, fill_invoices, gaps, get_bill, list_containers, mark_manual, stamp, open_db, set_iec_name, status_of } from '../../src/ts/store/db';
 
 const k = { sb_no: '6598990', sb_date: '2026-09-05', port_code: 'INMBD6' };
 
@@ -42,6 +42,21 @@ describe('store', () => {
     fill_containers(db, k, [{ container_no: 'MSDU7862584', size: '40', seal: 'OTHER' }, { container_no: 'TGHU1234567', size: '20', seal: 'S2' }]);
     const boxes = list_containers(db, k);
     expect(boxes.map(b => [b.container_no, b.size, b.seal, String(b.position)])).toEqual([['MSDU7862584', '40', '0216530', '0'], ['TGHU1234567', '20', 'S2', '1']]);
+  });
+  test('a gatepass and an EGM container with one seal are one box under the EGM number, in either order', () => {
+    for (const egm_first of [true, false]) {
+      const db = open_db(':memory:');
+      fill_bill(db, k, {});
+      const egm = { container_no: 'MSDU7862584', seal: 'S1', egm_no: '636', egm_date: '2024-02-28' }, pass = { container_no: 'MSDU7862548', size: '40', seal: 'S1' };
+      fill_containers(db, k, [egm_first ? egm : pass]); fill_containers(db, k, [egm_first ? pass : egm]);
+      expect(list_containers(db, k).map(b => [b.container_no, b.size, b.seal, b.egm_no])).toEqual([['MSDU7862584', '40', 'S1', '636']]);
+    }
+  });
+  test('different seals stay different containers', () => {
+    const db = open_db(':memory:');
+    fill_bill(db, k, {});
+    fill_containers(db, k, [{ container_no: 'MSDU7862584', seal: 'S1', egm_no: '636' }, { container_no: 'MSDU7862548', size: '40', seal: 'S2' }]);
+    expect(list_containers(db, k).length).toBe(2);
   });
   test('gaps lists blank report fields', () => {
     const db = open_db(':memory:');
@@ -87,6 +102,14 @@ describe('store', () => {
     const db = open_db(path);
     expect(db.query('SELECT iec FROM iec_names ORDER BY iec').all()).toEqual([{ iec: '2' }, { iec: '3' }]);
     db.close();
+  });
+  test('a bill closed by hand is Manual while it has gaps, and unknown bills cannot be closed', () => {
+    const db = open_db(':memory:');
+    expect(() => mark_manual(db, k)).toThrow();
+    fill_bill(db, k, { leo_date: '07 SEP 2026 00:09' }); stamp(db, k, 'enquiry');
+    expect(status_of(db, k)).toBe('Partial');
+    mark_manual(db, k); mark_manual(db, k);
+    expect(status_of(db, k)).toBe('Manual');
   });
   test('a date that is not a date is rejected, never stored', () => {
     const db = open_db(':memory:');

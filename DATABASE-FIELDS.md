@@ -80,7 +80,13 @@ A bill is `Success` when `iec`, `exporter`, an invoice, `leo_date`, a container,
 | name (the exporter) | My IEC list, `iec-set` | SAMPLE EXPORTS PVT LTD | DEMO TRADERS LLP |
 | source | `my-iec` or `user` | my-iec | user |
 
-## In Excel only, not stored in the database
+## `manual` (bills closed by hand)
+
+| Field | Data source(s) | Example 1 | Example 2 |
+| --- | --- | --- | --- |
+| fy, sb_no | `mark-manual` | 2024-25, 1000001 | 2025-26, 2000002 |
+
+ in the database
 
 Both are computed at export time.
 

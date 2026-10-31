@@ -9,7 +9,7 @@ import { command_client } from './icegate/client';
 import { gmail_gatepasses } from './gmail';
 import { CATALOG } from './icegate/schemas';
 import { parse_date } from './rules';
-import { gaps, list_bills, missing_iecs, open_db, set_iec_name, status_of, type BillKey, type Db } from './store/db';
+import { gaps, list_bills, mark_manual, missing_iecs, open_db, set_iec_name, status_of, type BillKey, type Db } from './store/db';
 import { gatepass_counts, report_sheets, sync, type RowStatus } from './workflow';
 
 export const ROOT = join(import.meta.dir, '../..');
@@ -19,6 +19,7 @@ const USAGE = `daily-report ${pkg.version} - fetch ICEGATE data into SQLite, the
 Usage: bun run sync [options]
        bun run sync iec-missing          IECs that still need an exporter name
        bun run sync iec-set IEC "NAME"   Approve the exporter name for an IEC
+       bun run sync mark-manual SBNO DATE Never query this bill again (closed by hand)
        bun run sync fields               Fields that can be exported
 
 Plain "bun run sync" creates bills from ICEGATE (Job Status plus the gatepass months), fetches
@@ -28,7 +29,7 @@ what unfinished bills lack into report.db, then rewrites report.xlsx from the da
   -n, --dry-run          Do everything except write report.xlsx
       --excel            Only rewrite report.xlsx from what report.db already holds (no ICEGATE calls)
       --to YYYY-MM-DD    Stop discovery at this month and fetch only bills dated from --from to this day
-      --force            Also query Success and Cancelled bills (normally never queried again)
+      --force            Also query Success, Cancelled and Manual bills (normally never queried again)
       --from YYYY-MM-DD  Discover bills from this month on (default: the month before the newest stored bill, else 2023-03-01)
   -f, --file PATH        Report (default: $EXCEL_PATH or "report.xlsx")
   -d, --data-dir PATH    Folder of report.db (default: $DAILY_REPORT_DATA_DIR or ./data)
@@ -42,7 +43,7 @@ what unfinished bills lack into report.db, then rewrites report.xlsx from the da
 Exit status is 1 if any bill errored.`;
 
 const paint = (code: number, text: string) => process.stdout.isTTY && !process.env.NO_COLOR ? `\x1b[${code}m${text}\x1b[0m` : text;
-const STATUS_COLOR: Record<RowStatus, number> = { Success: 32, Partial: 33, 'Not found': 36, Cancelled: 90, Error: 31 };
+const STATUS_COLOR: Record<RowStatus, number> = { Success: 32, Partial: 33, 'Not found': 36, Cancelled: 90, Manual: 35, Error: 31 };
 const tag = (name: string) => paint(36, `[${name}]`);
 
 const clip = (text: string, verbose: boolean) => verbose || text.length <= 110 ? text : text.slice(0, 107) + '...';
@@ -51,19 +52,20 @@ const FIRST_MONTH = '2023-03-01';
 
 /** Read-only: what the database still lacks per unfinished bill. */
 function showCheck(db: Db): void {
-  let incomplete = 0, cancelled = 0;
+  let incomplete = 0, cancelled = 0, manual = 0;
   const bills = list_bills(db).sort((a, b) => a.sb_date.localeCompare(b.sb_date));
   for (const b of bills) {
     const status = status_of(db, b);
     if (status === 'Cancelled') cancelled++;
-    if (status === 'Success' || status === 'Cancelled') continue;
+    if (status === 'Manual') manual++;
+    if (status === 'Success' || status === 'Cancelled' || status === 'Manual') continue;
     incomplete++;
     console.log(line(b, paint(STATUS_COLOR[status], status.padEnd(9)), `missing: ${gaps(db, b).join(', ')}`));
   }
   const counts = new Map<string, number>();
-  for (const b of bills) if (status_of(db, b) !== 'Success' && status_of(db, b) !== 'Cancelled') for (const g of gaps(db, b)) counts.set(g, (counts.get(g) ?? 0) + 1);
+  for (const b of bills) if (!['Success', 'Cancelled', 'Manual'].includes(status_of(db, b))) for (const g of gaps(db, b)) counts.set(g, (counts.get(g) ?? 0) + 1);
   if (counts.size) console.log(`${tag('gaps')} ${[...counts].sort((a, b) => b[1] - a[1]).map(([g, n]) => `${g} ${n}`).join(' · ')}`);
-  console.log(`${tag('check')} ${incomplete} incomplete · ${cancelled} cancelled · ${bills.length} bills`);
+  console.log(`${tag('check')} ${incomplete} incomplete · ${cancelled} cancelled · ${manual} manual · ${bills.length} bills`);
 }
 
 /** The month before the newest stored bill (late gatepasses and LEOs trail the bill date), or the portal's first month. */
@@ -101,6 +103,15 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
       if (!iec || !name?.trim() || rest.length !== 2 || !/^[0-9A-Za-z]{6,12}$/.test(iec)) throw new Error('Usage: iec-set IEC "NAME"');
       set_iec_name(open_db(dbPath), iec, name.trim(), 'user');
       console.log(`${tag('iec')} ${iec} = ${name.trim()}`);
+      return 0;
+    }
+    if (command === 'mark-manual') {
+      const [sb_no, date] = rest;
+      if (!sb_no || !date || rest.length !== 2) throw new Error('Usage: mark-manual SBNO SB_DATE');
+      const db = open_db(dbPath), bill = list_bills(db).find(b => b.sb_no === sb_no && b.sb_date === parse_date(date));
+      if (!bill) throw new Error(`No bill ${sb_no} dated ${date}`);
+      mark_manual(db, bill);
+      console.log(`${tag('manual')} ${sb_no} is closed by hand`);
       return 0;
     }
     if (command !== undefined) throw new Error(`Unknown command ${command}`);

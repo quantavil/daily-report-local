@@ -4,6 +4,8 @@ export const EXCEL_DATE_NUMBER_FORMAT = 'dd\\-mmm\\-yyyy';
 export const BLANK_VALUES = ['', '-', 'N.A.', 'N/A', 'NA', 'NONE', 'NULL'];
 /** Portal statuses treated as cancelled in the report. */
 export const CANCELLED_STATUS = /\bcancel|^purge after 30 days$/i;
+/** One physical box under two numbers: a gatepass container and an EGM container with the same seal. The EGM, filed later, is the container number the report keeps. */
+export const same_box_by_seal = (a: string, b: string): boolean => !!a && a === b;
 export const DERIVED_LCL = 'LCL';
 /** Containers are reused; bills of different exporters share one box (LCL) only when their SB dates are this close. */
 export const LCL_WINDOW_DAYS = 14;
@@ -65,7 +67,7 @@ export function secondary_identity_label(text:string,role:'anchor'|'companion'):
 export function value_token(field:string,input:string): string|null {
  const text=input.trim(); if (BLANK_VALUES.includes(text.toUpperCase())) return null;
  if (field==='sb_date') return parse_date(text);
- const checks:Record<string,RegExp>={sb_no:/^[0-9]{7}$/,port_code:/^[A-Z0-9]{6}$/,iec:/^[A-Z0-9]{10}$/,container_no:/^[A-Z0-9]{4,15}$/,container_size:/^(?:20|40|45)(?:\s*(?:FT|HC|GP|HQ))?$/i,customs_seal:/^[A-Za-z0-9][A-Za-z0-9/-]*$/};
+ const checks:Record<string,RegExp>={sb_no:/^[0-9]{7}$/,port_code:/^[A-Z0-9]{6}$/,iec:/^[A-Z0-9]{10}$/,container_no:/^[A-Z0-9]{4,15}$/,container_size:/^(?:20|40|45)\.?(?:\s*(?:FT|HC|GP|HQ))?$/i,customs_seal:/^[A-Za-z0-9][A-Za-z0-9/-]*$/};
  if (checks[field]&&!checks[field].test(text)) throw new Error(`Invalid ${field}`);
- return text;
+ return field==='container_size' ? text.replace(/\.$/,'') : text; // some gatepasses print the size as "40."
 }
