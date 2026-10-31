@@ -43,8 +43,9 @@ computer, and does one run at a time.
 
 1. The Job Status report and the SB35 eGatepass search (one query per month) list the bills.
    Both create bills, so no workbook row or email is needed.
+   Only bills these lists show for the logged-in ICEGATE ID are found: the Job Status report returns just the portal's latest ~200 rows, and the eGatepass list has no bill filed under another login. Searching in smaller windows returns the same bills.
 2. The public SB enquiry fills LEO date, job, invoices and EGM containers.
-3. The eGatepass PDF fills container, size, seal, the IEC (`IEC/Br`) and the exporter. If the ICEGATE gatepass is unavailable or cannot be read, Gmail is searched by SB number for PDF attachments, first in the bill’s financial year and then in later mail. Each candidate must pass the same bill number, date and port checks. Each accepted PDF is kept in `data/gatepass/` (git-ignored) and re-parsed from there.
+3. The eGatepass PDF fills container, size, seal, the IEC (`IEC/Br`) and the exporter. If the ICEGATE gatepass is unavailable or cannot be read, Gmail is searched by SB number for PDF attachments, first in the bill’s financial year and then in later mail. Each candidate must pass the same bill number, date and port checks. Each accepted PDF is kept in `data/gatepass/` (git-ignored) and re-parsed from there. A gatepass listed with a placeholder SB date (mostly 2024; such a record has no IRN to download) is found in Gmail the same way, and its bill takes the SB date printed on the PDF.
 
 Each sync reports gatepass counts for ICEGATE, Gmail, saved PDFs, unavailable documents and errors, and lists the result beside each processed bill. Counts describe the current run; the original source of a reused saved PDF is not recorded.
 
@@ -65,7 +66,7 @@ rebuilt from the database each run, so never edit it by hand.
 | Inv No / Inv Date | public SB enquiry |
 | Container No. / Size / Customs Seal Number | EGM list in the enquiry, then the gatepass |
 | EGM No / EGM Date | public SB enquiry, per container |
-| Type Shipment | `LCL (derived)` when a container is shared by bills of different exporters, else blank |
+| Type Shipment (derived) | `LCL` when a container is shared by bills of different exporters dated within 14 days, else blank |
 | Current Status | the portal's own status text |
 | Status | `Success`, `Partial`, `Cancelled` or `Not found` |
 

@@ -11,7 +11,11 @@
   session, verify the browser process has the personal `--user-data-dir`.
   If it does not, stop, close that temporary session, and relaunch correctly.
   Do not run a tab-list or other command that can start a session before the
-  explicitly configured launch. If the personal profile is unavailable or
+  explicitly configured launch. agent-browser silently relaunches with a temp
+  profile if the browser exits, so prefer launching `cloakbrowser-chrome` on the
+  personal profile with `--remote-debugging-port=9222` and attaching with
+  `agent-browser --cdp 9222`; re-verify `--user-data-dir` before every batch of
+  commands, not only at launch. Never open a non-logged-in profile. If the personal profile is unavailable or
   signed out, stop and tell the user; never fall back to another profile.
 
 Creates bills from ICEGATE into SQLite (`data/report.db`) with the `icegate` CLI, using
@@ -54,7 +58,7 @@ nobody fills anything by hand. This is the maintenance contract; setup and usage
 
 - Bills are created from two ICEGATE lists: the Job Status report (also the IEC per bill) and
   the SB35 eGatepass search, queried one month at a time from `--from` to today. Neither needs
-  a workbook row. Public SB enquiry: LEO date, invoices, job number, EGM containers.
+  a workbook row. Discovery sees only what these lists show for the logged-in ICEGATE ID: the Job Status report holds the portal's latest ~200 rows and takes no date range; a bill missing from both is not found (a bill filed under another ICEGATE ID is in neither; smaller eGatepass windows return the same set). A gatepass record whose SB date is not shortly before its job date (the portal lists placeholders such as 20-12-2002, mostly in 2024, and gives such a record no IRN to download) takes its identity from the PDF instead: Gmail is searched by SB number and the job date's financial year, and a PDF whose headers name that SB number and port, with a plausible SB date, creates the bill under the PDF's date and is kept; without such a PDF the record is skipped, and an existing bill with that SB number is not searched again. The portal's month window filters on the job date. Public SB enquiry: LEO date, invoices, job number, EGM containers.
   SB35 eGatepass (`ecopy search GATEPASS` for the SB date alone, since gatepass records carry the SB date, matched on `docNumber` = SB number. A batch run asks `plan()` first so a month with several SB dates is one search;
   its job number is a per-day counter, unrelated to the enquiry job number): container,
   size, seal, the IEC (`IEC/Br`) and the `3.Exporter` name. The gatepass is the only PDF read; there is no SB
@@ -92,8 +96,8 @@ nobody fills anything by hand. This is the maintenance contract; setup and usage
 - Statuses: `Success`, `Partial`, `Cancelled`, `Not found` (not known to the portal),
   `Error` (runtime or extraction failure, run output only).
 - Export is last and complete: every bill in the database is written, one `FY yyyy-yy` sheet
-  per year oldest first, rows by SB date. `Type Shipment` is `LCL (derived)` only when a
-  container is shared by bills of different non-empty exporters; it is computed, never stored.
+  per year oldest first, rows by SB date. `Type Shipment (derived)` is `LCL` only when a
+  container is shared by bills of different non-empty exporters dated within `LCL_WINDOW_DAYS`; it is computed, never stored.
 - `--check` is read-only (no network, no report write). `-n` does everything except write the
   report. `--excel` only rewrites the report from the database (no ICEGATE calls; not combinable with `--from`, `--to` or `--force`). `--from` sets the first discovery month. A
   gatepass the portal is still preparing leaves its fields blank for a later run.

@@ -98,28 +98,48 @@ function cell(page: LayoutPage, label: LayoutSpan, field: string): LayoutSpan[] 
 }
 const text = (spans: LayoutSpan[]) => spans.map(s => s.text).join(' ');
 
-/** The PDF must name the bill we asked for; a contradicting or missing header rejects the document. */
-function check_identity(pages: LayoutPage[], expected: BillKey): void {
-  let primary = 0;
+/** The identity values printed in each header of the PDF; a missing, ambiguous or invalid header rejects the document. */
+function header_identities(pages: LayoutPage[]): { primary: boolean; values: Partial<Record<(typeof rules.IDENTITY_FIELDS)[number], string | null>> }[] {
+  const out: ReturnType<typeof header_identities> = [];
   for (const page of pages) for (const anchor of labels(page, 'sb_no')) {
     let sources: Partial<Record<(typeof rules.IDENTITY_FIELDS)[number], LayoutSpan>> = {};
     for (const f of rules.IDENTITY_FIELDS) { const found = labels(page, f).filter(s => Math.abs(s.bbox[1] - anchor.bbox[1]) <= rules.ROW_TOLERANCE); if (found.length === 1) sources[f] = found[0]; }
-    if (rules.IDENTITY_FIELDS.every(f => sources[f])) primary++;
-    else if (rules.secondary_identity_label(anchor.text, 'anchor')) {
+    const primary = rules.IDENTITY_FIELDS.every(f => sources[f]);
+    if (!primary) {
+      if (!rules.secondary_identity_label(anchor.text, 'anchor')) throw new Error('PDF identity header missing or ambiguous');
       const p = rules.SECONDARY_IDENTITY;
       const companions = labels(page, p.field).filter(s => rules.secondary_identity_label(s.text, 'companion') && Math.abs(s.bbox[0] - anchor.bbox[0]) <= rules.COLUMN_TOLERANCE && Math.abs(s.bbox[1] - anchor.bbox[1] - p.row_offset) <= rules.ROW_TOLERANCE);
       if (companions.length !== 1) throw new Error('PDF secondary identity header missing or ambiguous');
       sources = { sb_no: anchor, sb_date: companions[0] };
-    } else throw new Error('PDF identity header missing or ambiguous');
+    }
+    const values: ReturnType<typeof header_identities>[number]['values'] = {};
     for (const f of rules.IDENTITY_FIELDS) {
       const source = sources[f];
       if (!source) continue;
-      let actual: string | null;
-      try { actual = rules.value_token(f, text(cell(page, source, f))); } catch { throw new Error('PDF identity source is invalid'); }
-      if (actual !== expected[f]) throw new Error('PDF identity conflicts with the requested bill');
+      try { values[f] = rules.value_token(f, text(cell(page, source, f))); } catch { throw new Error('PDF identity source is invalid'); }
     }
+    out.push({ primary, values });
   }
-  if (!primary) throw new Error('PDF primary identity header missing');
+  return out;
+}
+
+/** The PDF must name the bill we asked for; a contradicting or missing header rejects the document. */
+function check_identity(pages: LayoutPage[], expected: BillKey): void {
+  const headers = header_identities(pages);
+  for (const { values } of headers) for (const f of rules.IDENTITY_FIELDS) if (f in values && values[f] !== expected[f]) throw new Error('PDF identity conflicts with the requested bill');
+  if (!headers.some(h => h.primary)) throw new Error('PDF primary identity header missing');
+}
+
+/** The shipping bill a gatepass PDF names, for a bill whose portal list date is a placeholder; every header must agree. */
+export function gatepass_identity(pdf: Uint8Array): BillKey {
+  const headers = header_identities(extract_layout(pdf));
+  const one = (f: (typeof rules.IDENTITY_FIELDS)[number]) => {
+    const found = new Set(headers.flatMap(h => f in h.values ? [h.values[f]] : []));
+    if (found.size !== 1 || !found.values().next().value) throw new Error(`PDF names no single ${f}`);
+    return [...found][0]!;
+  };
+  if (!headers.some(h => h.primary)) throw new Error('PDF primary identity header missing');
+  return { sb_no: one('sb_no'), sb_date: one('sb_date'), port_code: one('port_code') };
 }
 
 type Row = Record<ContainerField, string | null>;

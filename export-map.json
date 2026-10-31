@@ -14,7 +14,7 @@
   "Customs Seal Number": "containers.seal",
   "EGM No": "containers.egm_no",
   "EGM Date": "containers.egm_date",
-  "Type Shipment": "derived.type_shipment",
+  "Type Shipment (derived)": "derived.type_shipment",
   "Current Status": "bills.curr_status",
   "Status": "derived.status"
 }

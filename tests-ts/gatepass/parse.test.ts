@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { parse_gatepass, parse_layout } from '../../src/ts/gatepass/parse';
+import { gatepass_identity, parse_gatepass, parse_layout } from '../../src/ts/gatepass/parse';
 import { pdf } from '../fixture';
 import type { LayoutSpan } from '../../src/ts/models';
 
@@ -77,5 +77,11 @@ describe('gatepass parsing', () => {
     const next = (name: string) => [...row('DEFU7654321', 'S2', '20', 100), ...named(name, 200)];
     expect(parse_layout(layout([...body, ...named('A LTD')], next('A LTD')), bill).exporter).toBe('A LTD');
     expect(() => parse_layout(layout([...body, ...named('A LTD')], next('B LTD')), bill)).toThrow('several exporters');
+  });
+  test('names the bill a PDF is for, and rejects a PDF whose headers disagree or are missing', () => {
+    const id = (no: string, date: string, y = 760): [string, number, number][] => [['SB No', 20, y], [no, 100, y], ['SB Date', 200, y], [date, 280, y], ['Port Code', 400, y], ['INMBD6', 480, y]];
+    expect(gatepass_identity(pdf(id('7546404', '07/10/2026')))).toEqual(bill);
+    expect(() => gatepass_identity(pdf([...id('7546404', '07/10/2026'), ...id('7546404', '08/10/2026', 600)]))).toThrow('no single sb_date');
+    expect(() => gatepass_identity(pdf([['3.Exporter', 20, 740]]))).toThrow();
   });
 });

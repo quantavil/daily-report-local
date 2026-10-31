@@ -4,7 +4,9 @@ export const EXCEL_DATE_NUMBER_FORMAT = 'dd\\-mmm\\-yyyy';
 export const BLANK_VALUES = ['', '-', 'N.A.', 'N/A', 'NA', 'NONE', 'NULL'];
 /** Portal statuses treated as cancelled in the report. */
 export const CANCELLED_STATUS = /\bcancel|^purge after 30 days$/i;
-export const DERIVED_LCL = 'LCL (derived)';
+export const DERIVED_LCL = 'LCL';
+/** Containers are reused; bills of different exporters share one box (LCL) only when their SB dates are this close. */
+export const LCL_WINDOW_DAYS = 14;
 export const LABELS: Record<string,RegExp> = {
  exporter:/^3\s*\.\s*Exporter$/i, iec:/^IEC\s*\/\s*Br\.?$/i,
  inv_no:/^2\s*\.\s*INVOICE\s+No\.?\s*&\s*Dt\.?$/i, leo_date:/^6\s*\.\s*LEO\s+Date\.?$/i,
@@ -44,6 +46,12 @@ export function parse_date(input: string): string {
   const month=MONTHS.indexOf(m[2]!.toLowerCase())+1; const yr=+m[3]!; return iso_date(m[3]!.length===2 ? (yr<=68?2000+yr:1900+yr) : yr,month,+m[1]!);
  }
  throw new Error('Invalid associated date');
+}
+/** The portal sometimes lists a gatepass with a placeholder SB date (e.g. 20-12-2002); a real one is dated at most this many days before its job date. */
+const GATEPASS_SB_LEAD_DAYS=31;
+export function plausible_sb_date(sb_date: string, job_date: string): boolean {
+ const lead=(Date.parse(parse_date(job_date))-Date.parse(parse_date(sb_date)))/864e5;
+ return lead>=0 && lead<=GATEPASS_SB_LEAD_DAYS;
 }
 /** A bill's identity from portal text; throws on anything that is not seven SB digits, a date and a six-character port. */
 export function bill_identity(sb_no: string, sb_date: string, port_code: string): { sb_no: string; sb_date: string; port_code: string } {

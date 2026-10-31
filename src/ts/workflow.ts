@@ -5,12 +5,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { field_kind, type ExportMap } from './excel/export-map';
 import type { Sheet } from './excel/report';
-import { parse_gatepass } from './gatepass/parse';
+import { gatepass_identity, parse_gatepass } from './gatepass/parse';
 import { GmailError } from './gmail';
 import { month_end, NotReady, type IcegateClient } from './icegate/client';
 import { BILL_FIELDS, type BillField } from './icegate/schemas';
-import { bill_identity, DERIVED_LCL, fy_of } from './rules';
-import { apply_iec_names, clean, DataError, fill_bill, fill_containers, fill_invoices, gaps, get_bill, list_bills, list_containers, list_invoices, set_iec_name, shared_containers, stamp, status_of, type Bill, type BillKey, type Db } from './store/db';
+import { bill_identity, DERIVED_LCL, fy_of, parse_date, plausible_sb_date } from './rules';
+import { apply_iec_names, clean, DataError, fill_bill, fill_containers, fill_invoices, gaps, get_bill, list_bills, list_containers, lcl_key, list_invoices, set_iec_name, shared_containers, stamp, status_of, type Bill, type BillKey, type Db } from './store/db';
 
 export type RowStatus = 'Success' | 'Partial' | 'Cancelled' | 'Not found' | 'Error';
 export type GatepassResult = 'saved' | 'icegate' | 'gmail' | 'unavailable' | 'error';
@@ -49,8 +49,34 @@ async function pool<T>(items: T[], size: number, fn: (item: T) => Promise<void>)
   await Promise.all(Array.from({ length: Math.min(size, items.length) }, async () => { while (next < items.length) await fn(items[next++]!); }));
 }
 
+type GmailSource = (bill: BillKey) => AsyncGenerator<Uint8Array>;
+
+/** Keeps the parsed gatepass as the source of the stored fields, so later runs parse it again instead of searching. */
+async function keep_pdf(keep: string, k: BillKey, bytes: Uint8Array): Promise<void> {
+  const file = join(keep, `${k.sb_date}_${k.sb_no}.pdf`);
+  if (existsSync(file)) return;
+  await mkdir(keep, { recursive: true, mode: 0o700 });
+  await writeFile(file, bytes, { mode: 0o600 }); await chmod(file, 0o600);
+}
+
+/** A gatepass record listed with a placeholder SB date has no usable date and no IRN to download. Its PDF, found in Gmail by SB number and the job date's financial year, names the real bill: that date is the bill's. Returns null when no PDF passes. */
+async function placeholder_bill(db: Db, r: Record<string, string | null | undefined>, gmail: GmailSource, keep: string): Promise<BillKey | null> {
+  const listed = bill_identity(r.docNumber!, r.docDate!, r.location!);
+  if (db.query('SELECT 1 FROM bills WHERE sb_no = ? AND port_code = ?').get(listed.sb_no, listed.port_code)) return null; // already created, by Job Status or an earlier run
+  for await (const candidate of gmail({ ...listed, sb_date: parse_date(r.jobDate!) })) {
+    try {
+      const named = gatepass_identity(candidate), k = bill_identity(named.sb_no, named.sb_date, named.port_code);
+      if (k.sb_no !== listed.sb_no || k.port_code !== listed.port_code || !plausible_sb_date(k.sb_date, r.jobDate!)) continue;
+      parse_gatepass(candidate, k);
+      fill_bill(db, k, {}); await keep_pdf(keep, k, candidate);
+      return k;
+    } catch { /* Try the next attachment. */ }
+  }
+  return null;
+}
+
 /** Job Status and My IEC (a failure stops the run before anything is written), then every gatepass month since `from`, which is what creates bills. A failed month is a warning. */
-export async function discover(db: Db, client: IcegateClient, from: string, to?: string): Promise<string[]> {
+export async function discover(db: Db, client: IcegateClient, from: string, to?: string, gmail?: GmailSource, keep = ''): Promise<string[]> {
   const [rows, ieces] = await Promise.all([client.jobStatus(), client.myIec()]), warnings: string[] = [];
   for (const row of rows) {
     let k: BillKey;
@@ -62,7 +88,10 @@ export async function discover(db: Db, client: IcegateClient, from: string, to?:
     try {
       for (const r of await client.gatepassWindow(`${month}-01`, month_end(month))) {
         let k: BillKey;
-        try { k = bill_identity(r.docNumber!, r.docDate!, r.location!); } catch { continue; }
+        try {
+          k = bill_identity(r.docNumber!, r.docDate!, r.location!);
+          if (!plausible_sb_date(k.sb_date, r.jobDate!)) { if (gmail) await placeholder_bill(db, r, gmail, keep); continue; }
+        } catch (error) { if (error instanceof GmailError) warnings.push(`SB ${r.docNumber}: ${error.message}`); continue; }
         try { fill_bill(db, k, {}); } catch (error) { if (!(error instanceof DataError)) throw error; warnings.push(`SB ${k.sb_no}: ${error.message}`); }
       }
     } catch (error) { warnings.push(`${month}: ${message(error)}`); }
@@ -81,7 +110,7 @@ async function enrich(db: Db, client: IcegateClient, k: BillKey): Promise<boolea
   return known;
 }
 
-/** Parse the SB35 gatepass: containers, the IEC and, for a bill without an IEC name, the exporter. A kept PDF is parsed again without the portal; otherwise search, download and keep it. Returns a note when there is nothing to parse yet. */
+/** Parse the SB35 gatepass: containers, the IEC and, for a bill without an IEC name, the exporter. A kept PDF is parsed again without the portal; otherwise search, download and keep it. Returns where the PDF came from, or `unavailable`. */
 async function gatepass(db: Db, client: IcegateClient, k: BillKey, keep: string, gmail?: (bill: BillKey) => AsyncGenerator<Uint8Array>, portal = true): Promise<GatepassResult> {
   const kept = join(keep, `${k.sb_date}_${k.sb_no}.pdf`);
   let bytes: Uint8Array | undefined;
@@ -114,10 +143,7 @@ async function gatepass(db: Db, client: IcegateClient, k: BillKey, keep: string,
       return 'unavailable';
     }
   }
-  if (!existsSync(kept)) { // the parsed PDF is kept as the source of the stored fields
-    await mkdir(keep, { recursive: true, mode: 0o700 });
-    await writeFile(kept, bytes, { mode: 0o600 }); await chmod(kept, 0o600);
-  }
+  await keep_pdf(keep, k, bytes);
   fill_bill(db, k, { iec: pass.iec, exporter: pass.exporter }); // first non-empty wins: the Job Status IEC and an IEC-derived name are kept
   fill_containers(db, k, pass.containers);
   stamp(db, k, 'gatepass');
@@ -152,7 +178,7 @@ async function work(db: Db, client: IcegateClient | null, k: BillKey, keep: stri
 const pending = (db: Db, b: Bill, force = false) => { const s = status_of(db, b); return force || (s !== 'Success' && s !== 'Cancelled'); };
 
 export async function sync(db: Db, client: IcegateClient, o: SyncOptions): Promise<SyncResult> {
-  const warnings = o.excel_only ? [] : await discover(db, client, o.from, o.to);
+  const warnings = o.excel_only ? [] : await discover(db, client, o.from, o.to, o.gmail, o.gatepass_dir);
   apply_iec_names(db); // before any gatepass, so an IEC-derived name outranks the gatepass exporter
   const todo = list_bills(db).filter(b => (!o.to || (b.sb_date >= o.from && b.sb_date <= o.to)) && pending(db, b, o.force)).map(key_of);
   if (!o.excel_only) client.plan(todo.filter(k => o.force || wants(gaps(db, k), 'container', 'size', 'seal', 'exporter', 'iec')).map(k => k.sb_date));
@@ -172,7 +198,7 @@ export function cells_for(db: Db, k: BillKey, map: ExportMap, lcl: Set<string>):
   for (const [header, id] of Object.entries(map)) {
     const [table, col] = id.split('.') as [string, string];
     const value = id === 'derived.status' ? status_of(db, k)
-      : id === 'derived.type_shipment' ? (lists.containers!.some(c => lcl.has(c.container_no!)) ? DERIVED_LCL : '')
+      : id === 'derived.type_shipment' ? (lists.containers!.some(c => lcl.has(lcl_key(c))) ? DERIVED_LCL : '')
       : table === 'bills' ? bill?.[col] ?? '' : (lists[table] ?? []).map(r => r[col] ?? '').join('\n');
     if (value.trim()) cells[header] = { value, date: field_kind(id) === 'date' };
   }

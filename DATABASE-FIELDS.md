@@ -86,7 +86,7 @@ Both are computed at export time.
 
 | Excel column | How it is computed | Example 1 | Example 2 |
 | --- | --- | --- | --- |
-| **Type Shipment** | `LCL (derived)` when a container is shared by bills of different non-empty exporters, else blank | (blank) | LCL (derived) |
+| **Type Shipment (derived)** | `LCL` when a container is shared by bills of different non-empty exporters, else blank | (blank) | LCL |
 | **Status** | `Success`, `Partial`, `Cancelled` or `Not found`, from what the database holds | Success | Partial |
 
 ## Candidate additions to the report

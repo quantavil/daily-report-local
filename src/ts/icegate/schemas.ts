@@ -56,7 +56,7 @@ const IDENTITY_FIELDS: { id: string; label: string; kind: FieldKind }[] = [
 ];
 /** Computed at export time from what the database holds, never stored. */
 const DERIVED_FIELDS: { id: string; label: string; kind: FieldKind }[] = [
-  { id: 'derived.status', label: 'Status', kind: 'text' }, { id: 'derived.type_shipment', label: 'Type shipment (LCL only when derived)', kind: 'text' },
+  { id: 'derived.status', label: 'Status', kind: 'text' }, { id: 'derived.type_shipment', label: 'Type shipment (derived; LCL only)', kind: 'text' },
 ];
 /** Every exportable field id (`bills.<col>` or a list field) with its label and kind. */
 export const CATALOG: { id: string; label: string; kind: FieldKind }[] = [

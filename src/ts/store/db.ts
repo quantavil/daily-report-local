@@ -3,7 +3,7 @@ import { Database } from 'bun:sqlite';
 import { chmodSync, copyFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { BILL_FIELDS, OWN_FIELDS } from '../icegate/schemas';
-import { BLANK_VALUES, CANCELLED_STATUS, fy_of, parse_date } from '../rules';
+import { BLANK_VALUES, CANCELLED_STATUS, fy_of, LCL_WINDOW_DAYS, parse_date } from '../rules';
 
 export interface BillKey { sb_no: string; sb_date: string; port_code: string }
 export type Bill = BillKey & Record<string, string>;
@@ -154,5 +154,6 @@ export function status_of(db: Db, k: BillKey): BillStatus {
   return bill && (bill.fetched_job || bill.fetched_enquiry) ? 'Partial' : 'Not found';
 }
 
-/** Containers carried by bills of more than one named exporter: shared boxes mean LCL. */
-export const shared_containers = (db: Db): Set<string> => new Set((db.query(`SELECT c.container_no FROM containers c JOIN bills b USING (fy, sb_no) WHERE b.exporter <> '' GROUP BY c.container_no HAVING COUNT(DISTINCT b.exporter) > 1`).all() as { container_no: string }[]).map(r => r.container_no));
+/** `fy|sb_no|container_no` of every container also carried by a bill of another named exporter dated within `LCL_WINDOW_DAYS`: shared boxes mean LCL. */
+export const lcl_key = (c: Record<string, string>) => `${c.fy}|${c.sb_no}|${c.container_no}`;
+export const shared_containers = (db: Db): Set<string> => new Set((db.query(`SELECT DISTINCT a.fy, a.sb_no, a.container_no FROM containers a JOIN bills x USING (fy, sb_no) JOIN containers c ON c.container_no = a.container_no JOIN bills y ON y.fy = c.fy AND y.sb_no = c.sb_no WHERE x.exporter <> '' AND y.exporter <> '' AND x.exporter <> y.exporter AND ABS(julianday(x.sb_date) - julianday(y.sb_date)) <= ?`).all(LCL_WINDOW_DAYS) as { fy: string; sb_no: string; container_no: string }[]).map(lcl_key));

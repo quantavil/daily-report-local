@@ -66,12 +66,43 @@ describe('sync', () => {
     expect(get_bill(db, k)!.iec).toBe('1111111111');
   });
   test('gatepass months create bills that Job Status never lists', async () => {
-    const records = [{ docNumber: '8108428', docDate: '27-10-2026', location: 'INMBD6' }, { docNumber: 'bad', docDate: '27-10-2026', location: 'INMBD6' }, { docNumber: '8108429', docDate: '28-10-2026', location: 'INMBD6' }];
+    const records = [{ docNumber: '8108428', docDate: '27-10-2026', jobDate: '27-10-2026', location: 'INMBD6' }, { docNumber: 'bad', docDate: '27-10-2026', jobDate: '27-10-2026', location: 'INMBD6' }, { docNumber: '8108429', docDate: '28-10-2026', jobDate: '28-10-2026', location: 'INMBD6' }, { docNumber: '8108430', docDate: '20-12-2002', jobDate: '28-10-2026', location: 'INMBD6' }];
     const asked: string[] = [];
     const { db, warnings } = await run(fake({ jobStatus: async () => [], gatepassWindow: async (from, to) => { asked.push(`${from}..${to}`); return from.startsWith('2026-10') ? records : []; } }), { from: '2026-09-15' });
     expect(asked.sort()).toEqual(['2026-09-01..2026-09-30', '2026-10-01..2026-10-31']);
     expect(list_bills(db).map(b => b.sb_no).sort()).toEqual(['8108428', '8108429']);
     expect(warnings).toEqual([]);
+  });
+  describe('a gatepass record listed with a placeholder SB date', () => {
+    const placeholder = { docNumber: '7546404', docDate: '20-12-2002', jobDate: '08-10-2026', location: 'INMBD6' };
+    const listing = (over: Partial<IcegateClient> = {}) => fake({ jobStatus: async () => [], gatepassWindow: async from => from.startsWith('2026-10') ? [placeholder] : [], ...over });
+    const mail = (...files: Uint8Array[]) => { const asked: string[] = []; return { asked, gmail: async function* (bill: typeof k) { asked.push(`${bill.sb_no} ${bill.sb_date}`); yield* files; } }; };
+    test('takes its SB date from the Gmail PDF, which is kept for the bill', async () => {
+      const { asked, gmail } = mail(GATEPASS), dir = mkdtempSync(join(tmpdir(), 'gatepass-'));
+      const { db, results } = await run(listing(), { gmail, gatepass_dir: dir });
+      expect(list_bills(db).map(b => `${b.sb_date} ${b.sb_no}`)).toEqual(['2026-10-07 7546404']);
+      expect(existsSync(join(dir, '2026-10-07_7546404.pdf'))).toBe(true);
+      expect(asked[0]).toBe('7546404 2026-10-08'); // searched by the job date's financial year
+      expect(results[0]![1]).toMatchObject({ status: 'Success', gatepass: 'saved' });
+    });
+    test('creates nothing without a PDF that names this bill with a plausible date', async () => {
+      const other = pdf([['SB No', 20, 760], ['9999999', 100, 760], ['SB Date', 200, 760], ['07/10/2026', 280, 760], ['Port Code', 400, 760], ['INMBD6', 480, 760]]);
+      const stale = pdf([['SB No', 20, 760], ['7546404', 100, 760], ['SB Date', 200, 760], ['07/09/2026', 280, 760], ['Port Code', 400, 760], ['INMBD6', 480, 760]]);
+      for (const files of [[], [other], [stale], [new Uint8Array([1, 2, 3])]]) {
+        const { db, warnings } = await run(listing(), { gmail: mail(...files).gmail });
+        expect(list_bills(db)).toEqual([]);
+        expect(warnings).toEqual([]);
+      }
+    });
+    test('is not searched again once the bill exists, and a Gmail failure is only a warning', async () => {
+      const db = open_db(':memory:'), { asked, gmail } = mail(GATEPASS);
+      await run(listing(), { gmail }, db); await run(listing(), { gmail }, db);
+      expect(asked).toEqual(['7546404 2026-10-08']);
+      const failing = async function* (): AsyncGenerator<Uint8Array> { throw new GmailError('Gmail lookup failed'); };
+      const { db: empty, warnings } = await run(listing(), { gmail: failing });
+      expect(list_bills(empty)).toEqual([]);
+      expect(warnings).toEqual(['SB 7546404: Gmail lookup failed']);
+    });
   });
   test('a failed month is a warning and the other months still run', async () => {
     const { db, warnings } = await run(fake({ gatepassWindow: async from => { if (from.startsWith('2026-09')) throw new IcegateError('slow'); return []; } }), { from: '2026-09-01' });
@@ -167,7 +198,7 @@ describe('sync', () => {
     expect(by['7546405']!.detail).toContain('enquiry: boom');
   });
   test('a bill the portal does not know is Not found, run after run', async () => {
-    const db = open_db(':memory:'), client = fake({ jobStatus: async () => [], enquiry: async () => EMPTY, gatepassWindow: async () => [{ docNumber: '7546404', docDate: '07-10-2026', location: 'INMBD6' }] });
+    const db = open_db(':memory:'), client = fake({ jobStatus: async () => [], enquiry: async () => EMPTY, gatepassWindow: async () => [{ docNumber: '7546404', docDate: '07-10-2026', jobDate: '07-10-2026', location: 'INMBD6' }] });
     for (let i = 0; i < 2; i++) expect((await run(client, {}, db)).results[0]![1].status).toBe('Not found');
   });
   test('a bill cancelled at the portal is never worked on', async () => {
@@ -217,9 +248,15 @@ describe('report', () => {
     fill_bill(db, k, { exporter: 'A' }); fill_bill(db, other, { exporter: 'B' }); fill_bill(db, alone, { exporter: 'A' });
     fill_containers(db, k, [{ container_no: 'SHARED1' }]); fill_containers(db, other, [{ container_no: 'SHARED1' }]); fill_containers(db, alone, [{ container_no: 'OWN1' }]);
     const lcl = shared_containers(db);
-    expect([...lcl]).toEqual(['SHARED1']);
-    expect(cells_for(db, k, DEFAULT_MAP, lcl)['Type Shipment']!.value).toBe('LCL (derived)');
-    expect(cells_for(db, alone, DEFAULT_MAP, lcl)['Type Shipment']).toBeUndefined();
+    expect([...lcl].map(x => x.split('|')[2]).sort()).toEqual(['SHARED1', 'SHARED1']);
+    expect(cells_for(db, k, DEFAULT_MAP, lcl)['Type Shipment (derived)']!.value).toBe('LCL');
+    expect(cells_for(db, alone, DEFAULT_MAP, lcl)['Type Shipment (derived)']).toBeUndefined();
+  });
+  test('a container reused months later by another exporter is not LCL', () => {
+    const db = open_db(':memory:'), later = { sb_no: '7546407', sb_date: '2026-12-20', port_code: 'INMBD6' };
+    fill_bill(db, k, { exporter: 'A' }); fill_bill(db, later, { exporter: 'B' });
+    fill_containers(db, k, [{ container_no: 'REUSED1' }]); fill_containers(db, later, [{ container_no: 'REUSED1' }]);
+    expect(shared_containers(db).size).toBe(0);
   });
   test('one sheet per financial year, oldest first, bills by date', () => {
     const db = open_db(':memory:');
