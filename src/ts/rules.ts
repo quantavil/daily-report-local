@@ -67,7 +67,7 @@ export function secondary_identity_label(text:string,role:'anchor'|'companion'):
 export function value_token(field:string,input:string): string|null {
  const text=input.trim(); if (BLANK_VALUES.includes(text.toUpperCase())) return null;
  if (field==='sb_date') return parse_date(text);
- const checks:Record<string,RegExp>={sb_no:/^[0-9]{7}$/,port_code:/^[A-Z0-9]{6}$/,iec:/^[A-Z0-9]{10}$/,container_no:/^[A-Z0-9]{4,15}$/,container_size:/^(?:20|40|45)\.?(?:\s*(?:FT|HC|GP|HQ))?$/i,customs_seal:/^[A-Za-z0-9][A-Za-z0-9/-]*$/};
+ const checks:Record<string,RegExp>={sb_no:/^[0-9]{7}$/,port_code:/^[A-Z0-9]{6}$/,iec:/^[A-Z0-9]{10}$/,container_no:/^[A-Z0-9]{4,15}$/,container_size:/^(?:20|40|45)\.?(?:\s*(?:FT|HC|GP|HQ))?$/i,customs_seal:/^[A-Za-z0-9][A-Za-z0-9/-]*\.?$/};
  if (checks[field]&&!checks[field].test(text)) throw new Error(`Invalid ${field}`);
- return field==='container_size' ? text.replace(/\.$/,'') : text; // some gatepasses print the size as "40."
+ return field==='container_size'||field==='customs_seal' ? text.replace(/\.$/,'') : text; // some gatepasses print the size or seal with a trailing dot ("40.", "BOLT51634360.")
 }

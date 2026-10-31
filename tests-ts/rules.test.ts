@@ -21,6 +21,7 @@ describe('ICEGATE policy', () => {
     expect(value_token('sb_date', '08/10/2026')).toBe('2026-10-08');
     expect(value_token('container_size', '40')).toBe('40');
     expect(value_token('container_size', '40.')).toBe('40');
+    expect(value_token('customs_seal', 'BOLT51634360.')).toBe('BOLT51634360');
     expect(value_token('customs_seal', 'N/A')).toBeNull();
     expect(() => value_token('customs_seal', 'BAD SEAL!')).toThrow();
     expect(() => value_token('container_no', 'ABC')).toThrow();

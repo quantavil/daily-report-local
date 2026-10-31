@@ -93,7 +93,7 @@ Known limits:
 
 - All ICEGATE calls are read-only. Credentials stay in the `icegate` client.
 - `report.xlsx` is written to a temporary file and renamed, so a failed run leaves the old one.
-- `data/` (git-ignored) holds `report.db` (mode 0600).
+- `data/` holds `report.db` (mode 0600, committed on purpose); its `gatepass/` folder of saved PDFs is git-ignored.
 
 ## Development
 

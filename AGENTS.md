@@ -126,7 +126,9 @@ nobody fills anything by hand. This is the maintenance contract; setup and usage
 - All ICEGATE calls are read-only; live uploads, staging or submits need explicit user
   authorization every time. Never print, log or commit credentials, OTPs, tokens, session
   ids, cookies or handoff URLs. TLS verification stays on; no automatic POST retries.
-- Git-ignored: `data/`, `.env`, `*.pdf`, backups and all `*.xlsx`.
-  `report.db` holds client data (mode 0600). Never commit live documents or secrets.
+- Committed on purpose, by the owner's decision, to a public repo: `data/report.db`, `report.xlsx`
+  (added with `git add -f`; other `*.xlsx` stay ignored) and `data/missing-from-login.txt`. They hold client data.
+  Git-ignored: `data/gatepass/`, `.env`, `*.pdf`, backups and every other `*.xlsx`. Never commit PDFs,
+  live documents or secrets.
 - Done means: `bun test` and `bun check` pass; no dead code, superseded files or unused
   dependencies; `AGENTS.md` and `README.md` match the implemented behavior.
