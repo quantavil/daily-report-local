@@ -1,7 +1,7 @@
 # Secrets & Local Credentials (NEVER COMMIT)
 .env
 .cache/
-data/
+data/gatepass/
 *.pdf
 # Local notes with real client identifiers
 FIELD-SOURCES.md
