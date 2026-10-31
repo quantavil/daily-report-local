@@ -1,5 +1,6 @@
-# Bills in the old Daily Working Report (FY 2023-24) that this ICEGATE login does not list: they were filed under another ICEGATE ID.
-# Confirmed: the website and the CLI return the same 275 gatepass records for 01-10-2023..29-02-2024, none of these.
+# Bills in the old Daily Working Report (FY 2023-24 and 2024-25) that this ICEGATE login does not list: they were filed under another ICEGATE ID.
+# FY 2023-24: the website and the CLI return the same 275 gatepass records for 01-10-2023..29-02-2024, none of these.
+# FY 2024-25: 20 bills, each found by the public SB enquiry; the gatepass lists were not re-checked for them.
 # SB date is from the old sheet; status is from the public SB enquiry (2026-10-31). Reference only; not in the database.
 # date	SB no	port	job no	status
 2023-05-12	9975809	INHDD6	5337818	shipped
@@ -60,3 +61,23 @@
 2024-01-06	6579219	INMBD6	1422621	shipped
 2024-01-07	6582712	INSTT6	1426492	shipped
 2024-01-07	6582727	INSTT6	1426510	shipped
+2024-04-16	9157242	INMBD6	4243303	purged (cancelled)
+2024-04-16	9157456	INMBD6	4243545	purged (cancelled)
+2024-04-16	9157613	INMBD6	4243710	purged (cancelled)
+2024-04-27	9459307	INMBD6	4573123	purged (cancelled)
+2024-05-18	9971019	INSTT6	5130332	shipped
+2024-05-18	9993117	INHPI6	5154530	shipped
+2024-05-20	1010729	INMBD6	5173723	shipped
+2024-05-20	1012465	INMBD6	5175598	shipped
+2024-05-22	1082921	INSTT6	5252404	shipped
+2024-05-23	1103993	INSTT6	5275120	shipped
+2024-05-25	1171712	INMBD6	5348930	shipped
+2024-05-27	1200990	INMBD6	5380648	shipped
+2024-05-27	1201451	INMBD6	5381126	shipped
+2024-05-27	1206663	INSTT6	5386847	shipped
+2024-05-28	1219276	INHDD6	5400433	shipped
+2024-05-29	1251494	INMBD6	5435382	shipped
+2024-05-29	1264868	INSTT6	5449861	shipped
+2024-08-13	3191830	INMBD6	7565321	purged (cancelled)
+2024-09-17	4075770	INMBD6	8524265	purged (cancelled)
+2024-09-17	4086949	INMBD6	8536327	purged (cancelled)
