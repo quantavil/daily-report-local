@@ -77,7 +77,7 @@ async function placeholder_bill(db: Db, r: Record<string, string | null | undefi
 
 /** Job Status and My IEC (a failure stops the run before anything is written), then every gatepass month since `from`, which is what creates bills. A failed month is a warning. */
 export async function discover(db: Db, client: IcegateClient, from: string, to?: string, gmail?: GmailSource, keep = ''): Promise<string[]> {
-  const [rows, ieces] = await Promise.all([client.jobStatus(), client.myIec()]), warnings: string[] = [];
+  const rows = await client.jobStatus(), ieces = await client.myIec(), warnings: string[] = []; // one login at a time: the portal answers 400 to simultaneous ones
   for (const row of rows) {
     let k: BillKey;
     try { k = bill_identity(row['SB No']!, row['SB date']!, row['Location Code']!); } catch { continue; }

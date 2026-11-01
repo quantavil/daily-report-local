@@ -68,7 +68,7 @@ describe('sync', () => {
   test('gatepass months create bills that Job Status never lists', async () => {
     const records = [{ docNumber: '8108428', docDate: '27-10-2026', jobDate: '27-10-2026', location: 'INMBD6' }, { docNumber: 'bad', docDate: '27-10-2026', jobDate: '27-10-2026', location: 'INMBD6' }, { docNumber: '8108429', docDate: '28-10-2026', jobDate: '28-10-2026', location: 'INMBD6' }, { docNumber: '8108430', docDate: '20-12-2002', jobDate: '28-10-2026', location: 'INMBD6' }];
     const asked: string[] = [];
-    const { db, warnings } = await run(fake({ jobStatus: async () => [], gatepassWindow: async (from, to) => { asked.push(`${from}..${to}`); return from.startsWith('2026-10') ? records : []; } }), { from: '2026-09-15' });
+    const { db, warnings } = await run(fake({ jobStatus: async () => [], gatepassWindow: async (from, to) => { asked.push(`${from}..${to}`); return from.startsWith('2026-10') ? records : []; } }), { from: '2026-09-15', to: '2026-10-31' }); // `to` keeps the month list independent of today
     expect(asked.sort()).toEqual(['2026-09-01..2026-09-30', '2026-10-01..2026-10-31']);
     expect(list_bills(db).map(b => b.sb_no).sort()).toEqual(['8108428', '8108429']);
     expect(warnings).toEqual([]);
