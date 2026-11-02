@@ -86,6 +86,12 @@ describe('store', () => {
     fill_bill(db, k, { curr_status: 'Purge after 30 days' });
     expect(status_of(db, k)).toBe('Cancelled');
   });
+  test('stale exam queue older than 30 days without LEO is cancelled', () => {
+    const db = open_db(':memory:');
+    const staleKey = { sb_no: '6598994', sb_date: '2026-06-01', port_code: 'INHTG6' };
+    fill_bill(db, staleKey, { curr_status: 'TO BE MARKED' });
+    expect(status_of(db, staleKey, new Date('2026-11-02T12:00:00Z'))).toBe('Cancelled');
+  });
   test('a newer non-empty portal status replaces an older one', () => {
     const db = open_db(':memory:');
     fill_bill(db, k, { curr_status: 'In progress' });

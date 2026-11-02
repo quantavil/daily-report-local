@@ -81,7 +81,7 @@ nobody fills anything by hand. This is the maintenance contract; setup and usage
 - The database key is financial year + SB number (`fy` from the SB date), never duplicated;
   a second date or port for the same key is an Error on that bill, never merged. Identity is
   built by `rules.ts` `bill_identity`; an invalid row from a portal list is skipped and blocks
-  no other bill. Cancellation is derived from the portal's current status (`CANCELLED_STATUS`), including `Purge after 30 days`,
+  no other bill. Cancellation is derived by `rules.ts` `is_cancelled` from portal cancellation statuses (`CANCELLED_STATUS`, including `Purge after 30 days`, `SB is Cancelled`, `LEO CANCELLED`, `CANCELLED (set by hand)`), and stale examination queues (`TO BE MARKED` / `TO BE EXAMINED` older than 30 days without LEO),
   never inferred from anything else.
 
 ## Run semantics

@@ -3,7 +3,7 @@ import { Database } from 'bun:sqlite';
 import { chmodSync, copyFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { BILL_FIELDS, OWN_FIELDS } from '../icegate/schemas';
-import { BLANK_VALUES, CANCELLED_STATUS, fy_of, LCL_WINDOW_DAYS, parse_date, same_box_by_seal } from '../rules';
+import { BLANK_VALUES, fy_of, is_cancelled, LCL_WINDOW_DAYS, parse_date, same_box_by_seal } from '../rules';
 
 export interface BillKey { sb_no: string; sb_date: string; port_code: string }
 export type Bill = BillKey & Record<string, string>;
@@ -165,9 +165,9 @@ export const missing_iecs = (db: Db) => db.query(`SELECT iec, COUNT(*) AS bills 
 
 type BillStatus = 'Success' | 'Partial' | 'Cancelled' | 'Manual' | 'Not found';
 /** Judged from what the database holds: cancelled by the portal, complete, closed by hand, never seen by the portal, or still missing fields. */
-export function status_of(db: Db, k: BillKey): BillStatus {
+export function status_of(db: Db, k: BillKey, now = new Date()): BillStatus {
   const bill = get_bill(db, k);
-  if (bill && CANCELLED_STATUS.test(bill.curr_status ?? '')) return 'Cancelled';
+  if (bill && is_cancelled(bill, now)) return 'Cancelled';
   if (!gaps(db, k).length) return 'Success';
   if (db.query(`SELECT 1 FROM manual WHERE ${where}`).get(...key_params(k))) return 'Manual';
   return bill && (bill.fetched_job || bill.fetched_enquiry) ? 'Partial' : 'Not found';

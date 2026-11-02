@@ -4,6 +4,19 @@ export const EXCEL_DATE_NUMBER_FORMAT = 'dd\\-mmm\\-yyyy';
 export const BLANK_VALUES = ['', '-', 'N.A.', 'N/A', 'NA', 'NONE', 'NULL'];
 /** Portal statuses treated as cancelled in the report. */
 export const CANCELLED_STATUS = /\bcancel|^purge after 30 days$/i;
+/** An abandoned examination record in the shed queue: filed without LEO for more than 30 days. */
+export const STALE_EXAM_STATUS = /^(?:to be marked|to be examined)$/i;
+export const STALE_EXAM_DAYS = 30;
+
+export function is_cancelled(bill: { curr_status?: string; leo_date?: string; sb_date?: string }, now = new Date()): boolean {
+  const status = bill.curr_status ?? '';
+  if (CANCELLED_STATUS.test(status)) return true;
+  if (!bill.leo_date && STALE_EXAM_STATUS.test(status) && bill.sb_date) {
+    const age = (now.getTime() - Date.parse(bill.sb_date)) / 864e5;
+    return age > STALE_EXAM_DAYS;
+  }
+  return false;
+}
 /** One physical box under two numbers: a gatepass container and an EGM container with the same seal. The EGM, filed later, is the container number the report keeps. */
 export const same_box_by_seal = (a: string, b: string): boolean => !!a && a === b;
 export const DERIVED_LCL = 'LCL';
@@ -67,7 +80,7 @@ export function secondary_identity_label(text:string,role:'anchor'|'companion'):
 export function value_token(field:string,input:string): string|null {
  const text=input.trim(); if (BLANK_VALUES.includes(text.toUpperCase())) return null;
  if (field==='sb_date') return parse_date(text);
- const checks:Record<string,RegExp>={sb_no:/^[0-9]{7}$/,port_code:/^[A-Z0-9]{6}$/,iec:/^[A-Z0-9]{10}$/,container_no:/^[A-Z0-9]{4,15}$/,container_size:/^(?:20|40|45)\.?(?:\s*(?:FT|HC|GP|HQ))?$/i,customs_seal:/^[A-Za-z0-9][A-Za-z0-9/-]*\.?$/};
+ const checks:Record<string,RegExp>={sb_no:/^[0-9]{7}$/,port_code:/^[A-Z0-9]{6}$/,iec:/^[A-Z0-9]{10}$/,container_no:/^[A-Z0-9]{4,15}$/,container_size:/^(?:20|40|45)\.?(?:\s*(?:FT|HC|GP|HQ|G1))?$/i,customs_seal:/^[A-Za-z0-9][A-Za-z0-9/-]*\.?$/};
  if (checks[field]&&!checks[field].test(text)) throw new Error(`Invalid ${field}`);
- return field==='container_size'||field==='customs_seal' ? text.replace(/\.$/,'') : text; // some gatepasses print the size or seal with a trailing dot ("40.", "BOLT51634360.")
+ return field==='container_size' ? text.replace(/\.$/,'').match(/^(?:20|40|45)/)?.[0] ?? text : field==='customs_seal' ? text.replace(/\.$/,'') : text; // some gatepasses print the size or seal with a trailing dot ("40.", "BOLT51634360.")
 }
