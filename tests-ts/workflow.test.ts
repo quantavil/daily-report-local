@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { DEFAULT_MAP } from '../src/ts/excel/export-map';
 import { GmailError } from '../src/ts/gmail';
 import { IcegateError, NotReady, type IcegateClient } from '../src/ts/icegate/client';
-import { cells_for, report_sheets, sync, gatepass_counts } from '../src/ts/workflow';
+import { cells_for, report_sheets, sync, gatepass_counts, type SyncOptions } from '../src/ts/workflow';
 import { fill_bill, fill_containers, get_bill, list_bills, open_db, set_iec_name, shared_containers } from '../src/ts/store/db';
 import { pdf } from './fixture';
 
@@ -33,8 +33,8 @@ function fake(over: Partial<IcegateClient> = {}): IcegateClient & { calls: strin
   };
 }
 const keep = mkdtempSync(join(tmpdir(), 'gatepass-'));
-const opts = { gmail: undefined as undefined | ((bill: typeof k) => AsyncGenerator<Uint8Array>), workers: 2, excel_only: false, force: false, from: '2026-10-01', gatepass_dir: keep };
-const run = (client: IcegateClient, extra: Partial<typeof opts> = {}, db = open_db(':memory:')) => sync(db, client, { ...opts, gatepass_dir: mkdtempSync(join(tmpdir(), 'gatepass-')), ...extra }).then(r => ({ db, ...r }));
+const opts: SyncOptions = { gmail: undefined, workers: 2, excel_only: false, force: false, from: '2026-10-01', gatepass_dir: keep };
+const run = (client: IcegateClient, extra: Partial<SyncOptions> = {}, db = open_db(':memory:')) => sync(db, client, { ...opts, gatepass_dir: mkdtempSync(join(tmpdir(), 'gatepass-')), ...extra }).then(r => ({ db, ...r }));
 const named = (db: ReturnType<typeof open_db>) => set_iec_name(db, '0123456789', 'ACME EXPORTS', 'my-iec');
 
 describe('sync', () => {
