@@ -66,7 +66,7 @@ rebuilt from the database each run, so never edit it by hand.
 | Job Date | Job Status report, then the enquiry |
 | Type of Stuffing (derived) | From the container seals, never stored: every seal carries a letter (RFID bolt seals such as BOLT, KLIK, ENOS) is `Factory stuffing`. Numeric, mixed or missing seals stay blank (a numeric seal is mostly ICD but can be Factory), unless set with `stuffing-set`. |
 | Facilitation Category | Gatepass `14.Facilitation Category` (e.g. GREEN CHANNEL). |
-| Remark(Agent code), Remark(Bill no.) | Blank header-only columns, filled by hand in Excel. |
+| Remark(Agent code), Remark(Bill no.) | Blank header-only columns, filled by hand in Excel; not stored in the database (see below). |
 | Remark(Own job Y/N) | Blank column filled by hand in Excel: `Y` when the owner's own firm made the job, `N` when a third party did. The dropdown allows only Y or N, and a `Y` colours that row's `SB Job No` cell green through an Excel rule that follows what you type. |
 | Exporter | IEC name (My IEC or `iec-set`), else the name other gatepasses gave that IEC (if they agree), else the gatepass `3.Exporter`, else the SB e-copy exporter (read only when IEC or exporter is still blank; filed bills have one before LEO). My IEC covers importers, not export clients, so it fills few names. |
 | IEC | Job Status report, else the gatepass `IEC/Br` |
@@ -94,6 +94,14 @@ Known limits:
 - When neither ICEGATE nor Gmail has a matching, readable gatepass, its missing fields stay blank.
 - A gatepass with a non-standard container number or a conflicting identity is rejected, not guessed.
 - A bill the portal answers nothing for stays `Not found` on every run.
+
+## Not stored in the database
+
+`report.xlsx` is rebuilt from `data/report.db` on every sync, so anything the database does not hold is lost on the next sync.
+
+- **Derived columns are computed, never stored:** `Status`, `Type of Stuffing (derived)` and `Type Shipment (derived)`. Typing into them in Excel does not last; the next sync overwrites it.
+- **Kept in the database on purpose:** bills, invoices and containers; `iec_names` (set with `iec-set`); `stuffing_overrides` (set with `stuffing-set`, wins over the seal rule); `manual` (set with `mark-manual`).
+- **Not stored anywhere but the file:** `Remark(Agent code)`, `Remark(Bill no.)` and `Remark(Own job Y/N)`. The sync writes them blank, so values typed into `report.xlsx` are blanked by the next sync, and so is the green `SB Job No` highlight that follows `Remark(Own job Y/N)`. Copy the file before syncing if you need them.
 
 ## Safety
 
