@@ -276,12 +276,12 @@ describe('report', () => {
     expect(cells_for(db, k, DEFAULT_MAP, new Set())['Type of Stuffing (derived)']!.value).toBe('Factory stuffing');
     expect(() => set_stuffing(db, { ...k, sb_no: '0' }, 'Factory stuffing')).toThrow();
   });
-  test('type of stuffing is read from the seals: letters mean factory, plain numbers mean ICD', () => {
+  test('type of stuffing is read from the seals: letters mean factory, plain numbers stay blank', () => {
     const db = open_db(':memory:'), icd = { sb_no: '7546405', sb_date: '2026-10-08', port_code: 'INMBD6' };
     fill_bill(db, k, {}); fill_bill(db, icd, {});
     fill_containers(db, k, [{ container_no: 'A1', seal: 'BOLT52524390' }]); fill_containers(db, icd, [{ container_no: 'B1', seal: '0227948' }]);
     expect(cells_for(db, k, DEFAULT_MAP, new Set())['Type of Stuffing (derived)']!.value).toBe('Factory stuffing');
-    expect(cells_for(db, icd, DEFAULT_MAP, new Set())['Type of Stuffing (derived)']!.value).toBe('ICD stuffing');
+    expect(cells_for(db, icd, DEFAULT_MAP, new Set())['Type of Stuffing (derived)']).toBeUndefined();
   });
   test('a container reused months later by another exporter is not LCL', () => {
     const db = open_db(':memory:'), later = { sb_no: '7546407', sb_date: '2026-12-20', port_code: 'INMBD6' };

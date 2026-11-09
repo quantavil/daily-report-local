@@ -20,8 +20,8 @@ export function is_cancelled(bill: { curr_status?: string; leo_date?: string; sb
 /** One physical box under two numbers: a gatepass container and an EGM container with the same seal. The EGM, filed later, is the container number the report keeps. */
 export const same_box_by_seal = (a: string, b: string): boolean => !!a && a === b;
 export const DERIVED_LCL = 'LCL';
-/** Owner's rule: an alphanumeric seal (RFID bolt seals such as BOLT, KLIK, ENOS) means factory stuffing. Every seal must carry a letter. Proof: in the owner's old Daily Working Report (Sheet1, ~4000 labelled rows) alphanumeric seals were Factory in 97% of rows and all-numeric seals were ICD in 97%; the exceptions are hand-corrected. Mixed seals stay blank. */
-export const stuffing_of = (seals: string[]): string => { const s = seals.filter(Boolean); return !s.length ? '' : s.every(x => /[A-Za-z]/.test(x)) ? 'Factory stuffing' : s.every(x => /^\d+$/.test(x)) ? 'ICD stuffing' : ''; };
+/** Owner's rule: an alphanumeric seal (RFID bolt seals such as BOLT, KLIK, ENOS) means factory stuffing. Every seal must carry a letter. Proof: in the owner's updated Daily Working Report (Sheet1, ~4400 labelled rows) 98% of alphanumeric-seal bills are Factory. Numeric seals are mostly ICD but can be Factory (seal broken at the ICD), so nothing is derived for them: they stay blank unless the owner sets them with `stuffing-set`. */
+export const stuffing_of = (seals: string[]): string => { const s = seals.filter(Boolean); return s.length && s.every(x => /[A-Za-z]/.test(x)) ? 'Factory stuffing' : ''; };
 /** Containers are reused; bills of different exporters share one box (LCL) only when their SB dates are this close. */
 export const LCL_WINDOW_DAYS = 14;
 export const LABELS: Record<string,RegExp> = {

@@ -95,7 +95,7 @@ Both are computed at export time.
 | Excel column | How it is computed | Example 1 | Example 2 |
 | --- | --- | --- | --- |
 | **Type Shipment (derived)** | `LCL` when a container is shared by bills of different non-empty exporters, else blank | (blank) | LCL |
-| **Type of Stuffing (derived)** | `Factory stuffing` when every seal has a letter, `ICD stuffing` when every seal is all-numeric, else blank; a `stuffing-set` override wins | (blank) | Factory stuffing |
+| **Type of Stuffing (derived)** | `Factory stuffing` when every seal has a letter, else blank; a `stuffing-set` override wins | (blank) | Factory stuffing |
 | **Status** | `Success`, `Partial`, `Cancelled` or `Not found`, from what the database holds | Success | Partial |
 
 ## Candidate additions to the report

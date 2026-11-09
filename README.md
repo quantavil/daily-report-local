@@ -64,7 +64,7 @@ rebuilt from the database each run, so never edit it by hand.
 | LEO Date | public SB enquiry |
 | SB Job No | `sb_job_no`: `jobNumber` of the SB e-copy search row, the daily job counter at filing. The long Job Status / enquiry job number stays in the database (`job_no`) but is not exported. |
 | Job Date | Job Status report, then the enquiry |
-| Type of Stuffing (derived) | From the container seals, never stored: every seal carries a letter (RFID bolt seals such as BOLT, KLIK, ENOS) is `Factory stuffing`; every seal all-numeric is `ICD stuffing` (both rules agree with 97% of the owner's old labelled workbook); mixed seals or no seal stay blank. |
+| Type of Stuffing (derived) | From the container seals, never stored: every seal carries a letter (RFID bolt seals such as BOLT, KLIK, ENOS) is `Factory stuffing`. Numeric, mixed or missing seals stay blank (a numeric seal is mostly ICD but can be Factory), unless set with `stuffing-set`. |
 | Facilitation Category | Gatepass `14.Facilitation Category` (e.g. GREEN CHANNEL). |
 | Remark(Agent code), Remark(Bill no.) | Blank header-only columns, filled by hand in Excel. |
 | Exporter | IEC name (My IEC or `iec-set`), else the name other gatepasses gave that IEC (if they agree), else the gatepass `3.Exporter`, else the SB e-copy exporter (read only when IEC or exporter is still blank; filed bills have one before LEO). My IEC covers importers, not export clients, so it fills few names. |
