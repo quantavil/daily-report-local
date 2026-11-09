@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { EXCEL_DATE_NUMBER_FORMAT, parse_date } from '../rules';
 
 export interface Cell { value: string; date?: boolean }
-export interface Sheet { name: string; headers: string[]; rows: Record<string, Cell>[]; /** Headers of derived columns: people and agents may override them, so they get an amber header. */ derived?: string[] }
+export interface Sheet { name: string; headers: string[]; rows: Record<string, Cell>[]; /** Headers of derived columns: people and agents may override them, so they get an amber header. */ derived?: string[]; /** Colours the `target` column's cells green in rows where the `flag` column says Y, and limits `flag` to Y or N. */ highlight?: { flag: string; target: string } }
 
 const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '');
 const letters = (n: number): string => (n > 26 ? letters(Math.floor((n - 1) / 26)) : '') + String.fromCharCode(65 + (n - 1) % 26);
@@ -31,18 +31,27 @@ function widths(s: Sheet): { width: number; left: boolean }[] {
   });
 }
 
+/** Live Excel rules, so the colour follows what the user types. Rule order in the sheet: conditional formatting, then data validation. */
+function highlight(s: Sheet): string {
+  const h = s.highlight, flag = h && s.headers.indexOf(h.flag) + 1, target = h && s.headers.indexOf(h.target) + 1;
+  if (!h || !flag || !target || !s.rows.length) return '';
+  const f = letters(flag), t = letters(target), n = s.rows.length + 1;
+  return `<conditionalFormatting sqref="${t}2:${t}${n}"><cfRule type="expression" dxfId="0" priority="1"><formula>$${f}2="Y"</formula></cfRule></conditionalFormatting>`
+    + `<dataValidations count="1"><dataValidation type="list" allowBlank="1" showErrorMessage="1" errorTitle="Y or N" error="Enter Y or N" sqref="${f}2:${f}${n}"><formula1>"Y,N"</formula1></dataValidation></dataValidations>`;
+}
+
 function sheetXml(s: Sheet): string {
   const w = widths(s), last = `${letters(s.headers.length)}${s.rows.length + 1}`;
   const head = s.headers.map((h, i) => `<c r="${letters(i + 1)}1" s="${s.derived?.includes(h) ? DERIVED_HEADER : HEADER}" t="inlineStr"><is><t>${esc(h)}</t></is></c>`).join('');
   const body = s.rows.map((r, i) => `<row r="${i + 2}">${s.headers.map((h, j) => cell(letters(j + 1) + (i + 2), i, r[h], w[j]!.left)).join('')}</row>`).join('');
   const cols = w.map((c, i) => `<col min="${i + 1}" max="${i + 1}" width="${c.width}" customWidth="1"/>`).join('');
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr><tabColor rgb="FF107C41"/></sheetPr><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="19.5"/><cols>${cols}</cols><sheetData><row r="1" ht="30" customHeight="1">${head}</row>${body}</sheetData><autoFilter ref="A1:${last}"/></worksheet>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr><tabColor rgb="FF107C41"/></sheetPr><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="19.5"/><cols>${cols}</cols><sheetData><row r="1" ht="30" customHeight="1">${head}</row>${body}</sheetData><autoFilter ref="A1:${last}"/>${highlight(s)}</worksheet>`;
 }
 
 const side = (color: string) => `<left style="thin"><color rgb="${color}"/></left><right style="thin"><color rgb="${color}"/></right><top style="thin"><color rgb="${color}"/></top><bottom style="thin"><color rgb="${color}"/></bottom>`;
 const body_xf = (fill: number, align: string, num = 0) => `<xf numFmtId="${num}" fontId="2" fillId="${fill}" borderId="2" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment ${align}/></xf>`;
 const BODY_XFS = [3, 4].flatMap(fill => [body_xf(fill, 'horizontal="center" vertical="center"'), body_xf(fill, 'horizontal="left" vertical="center"'), body_xf(fill, 'horizontal="center" vertical="center"', 164), body_xf(fill, 'horizontal="left" vertical="center" wrapText="1"')]);
-const STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="${EXCEL_DATE_NUMBER_FORMAT}"/></numFmts><fonts count="3"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font><font><sz val="10"/><color rgb="FF1E293B"/><name val="Calibri"/></font></fonts><fills count="6"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF1F4E78"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFFFFF"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFF8FAFC"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFB45309"/></patternFill></fill></fills><borders count="3"><border/><border>${side('FF326B9C')}</border><border>${side('FFE2E8F0')}</border></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="${3 + BODY_XFS.length}"><xf/><xf fontId="1" fillId="2" borderId="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>${BODY_XFS.join('')}<xf fontId="1" fillId="5" borderId="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf></cellXfs></styleSheet>`;
+const STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="${EXCEL_DATE_NUMBER_FORMAT}"/></numFmts><fonts count="3"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font><font><sz val="10"/><color rgb="FF1E293B"/><name val="Calibri"/></font></fonts><fills count="6"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF1F4E78"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFFFFF"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFF8FAFC"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFB45309"/></patternFill></fill></fills><borders count="3"><border/><border>${side('FF326B9C')}</border><border>${side('FFE2E8F0')}</border></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="${3 + BODY_XFS.length}"><xf/><xf fontId="1" fillId="2" borderId="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>${BODY_XFS.join('')}<xf fontId="1" fillId="5" borderId="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf></cellXfs><dxfs count="1"><dxf><font><color rgb="FF006100"/></font><fill><patternFill patternType="solid"><fgColor rgb="FFC6EFCE"/><bgColor rgb="FFC6EFCE"/></patternFill></fill></dxf></dxfs></styleSheet>`;
 
 export function build_report(sheets: Sheet[]): Uint8Array {
   const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"', rel = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';

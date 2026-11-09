@@ -67,6 +67,7 @@ rebuilt from the database each run, so never edit it by hand.
 | Type of Stuffing (derived) | From the container seals, never stored: every seal carries a letter (RFID bolt seals such as BOLT, KLIK, ENOS) is `Factory stuffing`. Numeric, mixed or missing seals stay blank (a numeric seal is mostly ICD but can be Factory), unless set with `stuffing-set`. |
 | Facilitation Category | Gatepass `14.Facilitation Category` (e.g. GREEN CHANNEL). |
 | Remark(Agent code), Remark(Bill no.) | Blank header-only columns, filled by hand in Excel. |
+| Remark(Own job Y/N) | Blank column filled by hand in Excel: `Y` when the owner's own firm made the job, `N` when a third party did. The dropdown allows only Y or N, and a `Y` colours that row's `SB Job No` cell green through an Excel rule that follows what you type. |
 | Exporter | IEC name (My IEC or `iec-set`), else the name other gatepasses gave that IEC (if they agree), else the gatepass `3.Exporter`, else the SB e-copy exporter (read only when IEC or exporter is still blank; filed bills have one before LEO). My IEC covers importers, not export clients, so it fills few names. |
 | IEC | Job Status report, else the gatepass `IEC/Br` |
 | Inv No | public SB enquiry (the invoice date stays in the database, not in the report) |

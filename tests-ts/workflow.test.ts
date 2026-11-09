@@ -269,6 +269,11 @@ describe('report', () => {
     expect(cells_for(db, k, DEFAULT_MAP, lcl)['Type Shipment (derived)']!.value).toBe('LCL');
     expect(cells_for(db, alone, DEFAULT_MAP, lcl)['Type Shipment (derived)']).toBeUndefined();
   });
+  test('the own-job column is blank and marks the sheet so Excel colours the SB Job No where it says Y', () => {
+    const db = open_db(':memory:'); fill_bill(db, k, {});
+    expect(cells_for(db, k, DEFAULT_MAP, new Set())['Remark(Own job Y/N)']).toBeUndefined();
+    expect(report_sheets(db, DEFAULT_MAP)[0]!.highlight).toEqual({ flag: 'Remark(Own job Y/N)', target: 'SB Job No' });
+  });
   test('a stored stuffing override beats the seal rule', () => {
     const db = open_db(':memory:');
     fill_bill(db, k, {}); fill_containers(db, k, [{ container_no: 'A1', seal: '0091802' }]);

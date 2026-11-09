@@ -227,5 +227,6 @@ export function cells_for(db: Db, k: BillKey, map: ExportMap, lcl: Set<string>):
 export function report_sheets(db: Db, map: ExportMap): Sheet[] {
   const lcl = shared_containers(db), years = new Map<string, Bill[]>();
   for (const b of list_bills(db).sort((a, b) => a.sb_date.localeCompare(b.sb_date) || a.sb_no.localeCompare(b.sb_no))) years.set(fy_of(b.sb_date), [...(years.get(fy_of(b.sb_date)) ?? []), b]);
-  return [...years].sort(([a], [b]) => a.localeCompare(b)).map(([fy, bills]) => ({ name: `FY ${fy}`, headers: Object.keys(map), derived: Object.keys(map).filter(h => map[h]!.startsWith('derived.')), rows: bills.map(b => cells_for(db, b, map, lcl)) }));
+  const header_of = (id: string) => Object.keys(map).find(h => map[h] === id), flag = header_of('derived.own_job'), target = header_of('bills.sb_job_no');
+  return [...years].sort(([a], [b]) => a.localeCompare(b)).map(([fy, bills]) => ({ name: `FY ${fy}`, headers: Object.keys(map), derived: Object.keys(map).filter(h => map[h]!.startsWith('derived.')), ...(flag && target ? { highlight: { flag, target } } : {}), rows: bills.map(b => cells_for(db, b, map, lcl)) }));
 }

@@ -18,6 +18,17 @@ test('dates are real serial numbers, text is escaped, multi-line cells wrap', ()
   expect(strFromU8(files['xl/styles.xml']!)).toContain('FF1F4E78'); // dark blue header
 });
 
+test('the highlight flag colours the target column live and limits the flag column to Y or N', () => {
+  const marked: Sheet[] = [{ name: 'FY 2026-27', headers: ['SB Job No', 'Own'], highlight: { flag: 'Own', target: 'SB Job No' }, rows: [{ 'SB Job No': { value: '12' }, Own: { value: 'Y' } }, { 'SB Job No': { value: '13' } }] }];
+  const files = unzipSync(build_report(marked)), xml = strFromU8(files['xl/worksheets/sheet1.xml']!);
+  expect(xml).toContain('<conditionalFormatting sqref="A2:A3"><cfRule type="expression" dxfId="0" priority="1"><formula>$B2="Y"</formula>');
+  expect(xml).toContain('sqref="B2:B3"><formula1>"Y,N"</formula1>');
+  expect(xml.indexOf('<autoFilter')).toBeLessThan(xml.indexOf('<conditionalFormatting'));
+  expect(xml.indexOf('<conditionalFormatting')).toBeLessThan(xml.indexOf('<dataValidations'));
+  expect(strFromU8(files['xl/styles.xml']!)).toContain('<dxfs count="1">');
+  expect(strFromU8(unzipSync(build_report(sheets))['xl/worksheets/sheet1.xml']!)).not.toContain('conditionalFormatting');
+});
+
 test('the report is replaced atomically and leaves no temporary file', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'daily-report-')), path = join(dir, 'report.xlsx');
   await write_report(path, sheets); await write_report(path, sheets);

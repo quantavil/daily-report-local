@@ -19,5 +19,6 @@
   "Current Status": "bills.curr_status",
   "Status": "derived.status",
   "Remark(Agent code)": "derived.blank",
-  "Remark(Bill no.)": "derived.blank"
+  "Remark(Bill no.)": "derived.blank",
+  "Remark(Own job Y/N)": "derived.own_job"
 }
