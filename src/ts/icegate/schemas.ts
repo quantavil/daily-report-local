@@ -42,7 +42,7 @@ export const BILL_FIELDS: BillField[] = [
 ];
 /** Columns that are not fetched field-by-field: set by the workflow itself. */
 export const OWN_FIELDS: { col: string; label: string; kind: FieldKind }[] = [
-  { col: 'exporter', label: 'Exporter', kind: 'text' },
+  { col: 'exporter', label: 'Exporter', kind: 'text' }, { col: 'facilitation', label: 'Facilitation category', kind: 'text' }, { col: 'sb_job_no', label: 'SB copy job no (daily counter)', kind: 'text' },
 ];
 /** Related-record fields, joined with newlines when exported. Table `invoices` or `containers`. */
 export const LIST_FIELDS: { id: string; label: string; kind: FieldKind }[] = [
@@ -56,7 +56,7 @@ const IDENTITY_FIELDS: { id: string; label: string; kind: FieldKind }[] = [
 ];
 /** Computed at export time from what the database holds, never stored. */
 const DERIVED_FIELDS: { id: string; label: string; kind: FieldKind }[] = [
-  { id: 'derived.status', label: 'Status', kind: 'text' }, { id: 'derived.type_shipment', label: 'Type shipment (derived; LCL only)', kind: 'text' },
+  { id: 'derived.status', label: 'Status', kind: 'text' }, { id: 'derived.blank', label: 'Blank column (filled in Excel)', kind: 'text' }, { id: 'derived.stuffing', label: 'Type of stuffing (derived; from the seal)', kind: 'text' }, { id: 'derived.type_shipment', label: 'Type shipment (derived; LCL only)', kind: 'text' },
 ];
 /** Every exportable field id (`bills.<col>` or a list field) with its label and kind. */
 export const CATALOG: { id: string; label: string; kind: FieldKind }[] = [

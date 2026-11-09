@@ -19,7 +19,9 @@ A bill is `Success` when `iec`, `exporter`, an invoice, `leo_date`, a container,
 | **job_no** | Job Status report, public SB enquiry | 2700001 | 2600002 |
 | **job_date** | Job Status report, public SB enquiry | 2026-10-05 | 2026-02-14 |
 | control_number | Job Status report | (blank) | (blank) |
-| **exporter** | IEC name map (My IEC list, `iec-set`), gatepass `3.Exporter` | SAMPLE EXPORTS PVT LTD | DEMO TRADERS LLP |
+| sb_job_no | SB e-copy search row `jobNumber` (daily counter) | 953 | (blank) |
+| facilitation | gatepass `14.Facilitation Category` | GREEN CHANNEL | (blank) |
+| **exporter** | IEC name map (My IEC list, `iec-set`), gatepass `3.Exporter`, SB e-copy exporter (last resort) | SAMPLE EXPORTS PVT LTD | DEMO TRADERS LLP |
 | cha_no | public SB enquiry | AAAAA0000ACH001 | AAAAA0000ACH001 |
 | port_of_discharge | public SB enquiry | ZACPT | AEJEA |
 | total_package | public SB enquiry | 1326 | 480 |
@@ -93,6 +95,7 @@ Both are computed at export time.
 | Excel column | How it is computed | Example 1 | Example 2 |
 | --- | --- | --- | --- |
 | **Type Shipment (derived)** | `LCL` when a container is shared by bills of different non-empty exporters, else blank | (blank) | LCL |
+| **Type of Stuffing (derived)** | `Factory stuffing` when every seal has a letter, `ICD stuffing` when every seal is all-numeric, else blank; a `stuffing-set` override wins | (blank) | Factory stuffing |
 | **Status** | `Success`, `Partial`, `Cancelled` or `Not found`, from what the database holds | Success | Partial |
 
 ## Candidate additions to the report

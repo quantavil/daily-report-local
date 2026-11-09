@@ -5,12 +5,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { field_kind, type ExportMap } from './excel/export-map';
 import type { Sheet } from './excel/report';
-import { gatepass_identity, parse_gatepass } from './gatepass/parse';
+import { gatepass_identity, parse_gatepass, parse_sbcopy } from './gatepass/parse';
 import { GmailError } from './gmail';
-import { month_end, NotReady, type IcegateClient } from './icegate/client';
+import { month_end, NotReady, type EcopyRecord, type IcegateClient } from './icegate/client';
 import { BILL_FIELDS, type BillField } from './icegate/schemas';
-import { bill_identity, DERIVED_LCL, fy_of, parse_date, plausible_sb_date } from './rules';
-import { apply_iec_names, clean, DataError, fill_bill, fill_containers, fill_invoices, gaps, get_bill, list_bills, list_containers, lcl_key, list_invoices, set_iec_name, shared_containers, stamp, status_of, type Bill, type BillKey, type Db } from './store/db';
+import { bill_identity, DERIVED_LCL, fy_of, parse_date, plausible_sb_date, stuffing_of } from './rules';
+import { apply_iec_names, clean, DataError, fill_bill, fill_containers, fill_invoices, gaps, get_bill, list_bills, stuffing_override, list_containers, lcl_key, list_invoices, set_iec_name, shared_containers, stamp, status_of, type Bill, type BillKey, type Db } from './store/db';
 
 export type RowStatus = 'Success' | 'Partial' | 'Cancelled' | 'Manual' | 'Not found' | 'Error';
 export type GatepassResult = 'saved' | 'icegate' | 'gmail' | 'unavailable' | 'error';
@@ -110,7 +110,26 @@ async function enrich(db: Db, client: IcegateClient, k: BillKey): Promise<boolea
   return known;
 }
 
-/** Parse the SB35 gatepass: containers, the IEC and, for a bill without an IEC name, the exporter. A kept PDF is parsed again without the portal; otherwise search, download and keep it. Returns where the PDF came from, or `unavailable`. */
+/** The signed PDF of an e-copy record, read into memory; the temporary file never outlives the call. */
+async function download(client: IcegateClient, record: EcopyRecord): Promise<Uint8Array> {
+  const dir = await mkdtemp(join(tmpdir(), 'daily-report-'));
+  try { const file = join(dir, 'ecopy.pdf'); await client.ecopyDownload(record, file); return new Uint8Array(await readFile(file)); }
+  finally { await rm(dir, { recursive: true, force: true }); }
+}
+
+/** The SB e-copy listing is available from filing day. Its `jobNumber` (a daily counter, 953 for the 953rd job of the day) is stored for every bill; the PDF is read only when IEC or exporter is still blank and then only those two values are kept. False when the portal lists no copy. */
+async function sbcopy(db: Db, client: IcegateClient, k: BillKey, names: boolean): Promise<boolean> {
+  const record = (await client.sbcopySearch({ location: k.port_code, sb_no: k.sb_no, sb_date: k.sb_date })).at(-1);
+  if (!record) return false;
+  fill_bill(db, k, { sb_job_no: clean(record.jobNumber ?? '') });
+  if (names && record.irn && wants(gaps(db, k), 'iec', 'exporter')) {
+    const copy = parse_sbcopy(await download(client, record), k);
+    fill_bill(db, k, { iec: copy.iec, exporter: copy.exporter });
+  }
+  return true;
+}
+
+/** Parse the SB35 gatepass: containers, the IEC, the exporter and the facilitation category. A kept PDF is parsed again without the portal; otherwise search, download and keep it. Returns where the PDF came from, or `unavailable`. */
 async function gatepass(db: Db, client: IcegateClient, k: BillKey, keep: string, gmail?: (bill: BillKey) => AsyncGenerator<Uint8Array>, portal = true): Promise<GatepassResult> {
   const kept = join(keep, `${k.sb_date}_${k.sb_no}.pdf`);
   let bytes: Uint8Array | undefined;
@@ -123,15 +142,7 @@ async function gatepass(db: Db, client: IcegateClient, k: BillKey, keep: string,
   } else {
     try {
       const record = portal ? (await client.gatepassSearch({ location: k.port_code, sb_no: k.sb_no, sb_date: k.sb_date })).filter(r => r.irn).at(-1) : undefined;
-      if (record) {
-        const dir = await mkdtemp(join(tmpdir(), 'daily-report-'));
-        try {
-          const file = join(dir, 'gatepass.pdf');
-          await client.gatepassDownload(record, file);
-          const candidate = new Uint8Array(await readFile(file));
-          pass = parse_gatepass(candidate, k); bytes = candidate; source = 'icegate';
-        } finally { await rm(dir, { recursive: true, force: true }); }
-      }
+      if (record) { const candidate = await download(client, record); pass = parse_gatepass(candidate, k); bytes = candidate; source = 'icegate'; }
     } catch (error) { portalError = error; }
     if (!pass && gmail) {
       for await (const candidate of gmail(k)) {
@@ -144,7 +155,7 @@ async function gatepass(db: Db, client: IcegateClient, k: BillKey, keep: string,
     }
   }
   await keep_pdf(keep, k, bytes);
-  fill_bill(db, k, { iec: pass.iec, exporter: pass.exporter }); // first non-empty wins: the Job Status IEC and an IEC-derived name are kept
+  fill_bill(db, k, { iec: pass.iec, exporter: pass.exporter, facilitation: pass.facilitation }); // first non-empty wins: the Job Status IEC and an IEC-derived name are kept
   fill_containers(db, k, pass.containers);
   stamp(db, k, 'gatepass');
   return source;
@@ -164,6 +175,11 @@ async function work(db: Db, client: IcegateClient | null, k: BillKey, keep: stri
       try { gatepassResult = await gatepass(db, client, k, keep, gmail, !!get_bill(db, k)?.leo_date); if (gatepassResult === 'unavailable') notes.push('no matching gatepass'); }
       catch (error) { gatepassResult = error instanceof NotReady ? 'unavailable' : 'error'; if (error instanceof NotReady) notes.push('gatepass not ready'); else if (error instanceof GmailError) notes.push(error.message); else errors.push(`gatepass: ${message(error)}`); }
     }
+    const names = status_of(db, k) !== 'Cancelled' && wants(gaps(db, k), 'iec', 'exporter');
+    if (known && status_of(db, k) !== 'Manual' && (names || !get_bill(db, k)?.sb_job_no)) { // the gatepass is preferred for IEC and exporter; the SB e-copy listing supplies the job counter
+      try { if (!(await sbcopy(db, client, k, names))) notes.push('no SB e-copy'); }
+      catch (error) { if (error instanceof NotReady) notes.push('SB e-copy not ready'); else errors.push(`SB e-copy: ${message(error)}`); }
+    }
   }
   const status = status_of(db, k);
   if (status === 'Cancelled') return { status, detail: 'Classified as cancelled from portal status', gatepass: gatepassResult };
@@ -175,8 +191,8 @@ async function work(db: Db, client: IcegateClient | null, k: BillKey, keep: stri
   return { status: 'Partial', detail: [`missing: ${missing.join(', ')}`, ...notes].join('; '), gatepass: gatepassResult };
 }
 
-/** Bills that can still gain something: not complete, cancelled or closed by hand, unless the run is forced. */
-const pending = (db: Db, b: Bill, force = false) => { const s = status_of(db, b); return force || (s !== 'Success' && s !== 'Cancelled' && s !== 'Manual'); };
+/** Bills that can still gain something: not complete, cancelled or closed by hand, unless the run is forced. A bill without its SB job counter is also revisited, except one closed by hand. */
+const pending = (db: Db, b: Bill, force = false) => { const s = status_of(db, b); return force || (s !== 'Success' && s !== 'Cancelled' && s !== 'Manual') || (s !== 'Manual' && !b.sb_job_no); };
 
 export async function sync(db: Db, client: IcegateClient, o: SyncOptions): Promise<SyncResult> {
   const warnings = o.excel_only ? [] : await discover(db, client, o.from, o.to, o.gmail, o.gatepass_dir);
@@ -199,6 +215,7 @@ export function cells_for(db: Db, k: BillKey, map: ExportMap, lcl: Set<string>):
   for (const [header, id] of Object.entries(map)) {
     const [table, col] = id.split('.') as [string, string];
     const value = id === 'derived.status' ? status_of(db, k)
+      : id === 'derived.stuffing' ? stuffing_override(db, k) || stuffing_of(lists.containers!.map(c => c.seal ?? ''))
       : id === 'derived.type_shipment' ? (lists.containers!.some(c => lcl.has(lcl_key(c))) ? DERIVED_LCL : '')
       : table === 'bills' ? bill?.[col] ?? '' : (lists[table] ?? []).map(r => r[col] ?? '').join('\n');
     if (value.trim()) cells[header] = { value, date: field_kind(id) === 'date' };
@@ -210,5 +227,5 @@ export function cells_for(db: Db, k: BillKey, map: ExportMap, lcl: Set<string>):
 export function report_sheets(db: Db, map: ExportMap): Sheet[] {
   const lcl = shared_containers(db), years = new Map<string, Bill[]>();
   for (const b of list_bills(db).sort((a, b) => a.sb_date.localeCompare(b.sb_date) || a.sb_no.localeCompare(b.sb_no))) years.set(fy_of(b.sb_date), [...(years.get(fy_of(b.sb_date)) ?? []), b]);
-  return [...years].sort(([a], [b]) => a.localeCompare(b)).map(([fy, bills]) => ({ name: `FY ${fy}`, headers: Object.keys(map), rows: bills.map(b => cells_for(db, b, map, lcl)) }));
+  return [...years].sort(([a], [b]) => a.localeCompare(b)).map(([fy, bills]) => ({ name: `FY ${fy}`, headers: Object.keys(map), derived: Object.keys(map).filter(h => map[h]!.startsWith('derived.')), rows: bills.map(b => cells_for(db, b, map, lcl)) }));
 }

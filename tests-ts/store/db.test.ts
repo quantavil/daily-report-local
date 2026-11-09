@@ -3,13 +3,20 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { clean, DataError, fill_bill, fill_containers, fill_invoices, gaps, get_bill, list_containers, mark_manual, stamp, open_db, set_iec_name, status_of } from '../../src/ts/store/db';
+import { apply_iec_names, clean, DataError, fill_bill, fill_containers, fill_invoices, gaps, get_bill, list_containers, mark_manual, stamp, open_db, set_iec_name, status_of } from '../../src/ts/store/db';
 
 const k = { sb_no: '6598990', sb_date: '2026-09-05', port_code: 'INMBD6' };
 
 const iec_name = (db: ReturnType<typeof open_db>, iec: string) => (db.query('SELECT name FROM iec_names WHERE iec = ?').get(iec) as { name: string } | null)?.name ?? '';
 
 describe('store', () => {
+  test('a name the gatepasses gave an IEC fills its blank bills unless they disagree', () => {
+    const db = open_db(':memory:');
+    const bill = (n: number, iec: string, exporter: string) => { const key = { ...k, sb_no: String(n) }; fill_bill(db, key, { iec, exporter }); return key; };
+    const [a, b, c, d, e] = [bill(1, 'IEC1', 'ACME'), bill(2, 'IEC1', ''), bill(3, 'IEC2', 'X LTD'), bill(4, 'IEC2', 'X LIMITED'), bill(5, 'IEC2', '')];
+    apply_iec_names(db);
+    expect([a, b, c, d, e].map(key => get_bill(db, key)!.exporter)).toEqual(['ACME', 'ACME', 'X LTD', 'X LIMITED', '']);
+  });
   test('clean drops placeholders and normalises dates', () => {
     expect(clean('N.A.')).toBe(''); expect(clean('NONE')).toBe(''); expect(clean(' - ')).toBe('');
     expect(clean('07 SEP 2026 00:09', 'date')).toBe('2026-09-07');
@@ -124,13 +131,13 @@ describe('store', () => {
     expect(get_bill(db, k)?.leo_date ?? '').toBe('');
     expect(clean('N.A.', 'date')).toBe('');
   });
-  test('a v4 database keeps its rows when shipper becomes exporter', () => {
+  test.each([5, 6])('a v%i database keeps its rows and gains the missing columns', version => {
     const path = join(mkdtempSync(join(tmpdir(), 'daily-report-')), 'report.db'), old = open_db(path);
-    old.run('ALTER TABLE bills RENAME COLUMN exporter TO shipper'); old.run('PRAGMA user_version = 4');
-    old.query("INSERT INTO bills (fy, sb_no, sb_date, port_code, shipper) VALUES ('2026-27', ?, ?, ?, 'ACME')").run(k.sb_no, k.sb_date, k.port_code);
+    old.run('ALTER TABLE bills DROP COLUMN sb_job_no'); if (version === 5) old.run('ALTER TABLE bills DROP COLUMN facilitation'); old.run(`PRAGMA user_version = ${version}`);
+    old.query("INSERT INTO bills (fy, sb_no, sb_date, port_code, exporter) VALUES ('2026-27', ?, ?, ?, 'ACME')").run(k.sb_no, k.sb_date, k.port_code);
     old.close();
     const db = open_db(path);
-    expect(get_bill(db, k)!.exporter).toBe('ACME'); expect(existsSync(`${path}.bak-v4`)).toBe(true);
+    expect(get_bill(db, k)).toMatchObject({ exporter: 'ACME', facilitation: '', sb_job_no: '' }); expect(existsSync(`${path}.bak-v${version}`)).toBe(true);
   });
   test('upgrading a database keeps a copy of the old file', () => {
     const path = join(mkdtempSync(join(tmpdir(), 'daily-report-')), 'report.db'), old = new Database(path, { create: true });

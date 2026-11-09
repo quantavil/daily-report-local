@@ -55,12 +55,12 @@ describe('icegate client', () => {
   });
   test('a 409 retry message becomes NotReady', async () => {
     const { client } = await fake('echo "error: e-copy document is being retrieved by the portal; retry in about 60 minutes" >&2; exit 1');
-    await expect(client.gatepassDownload({ irn: 'x' }, '/tmp/x.pdf')).rejects.toBeInstanceOf(NotReady);
+    await expect(client.ecopyDownload({ irn: 'x' }, '/tmp/x.pdf')).rejects.toBeInstanceOf(NotReady);
   });
   test('download needs an IRN and sends the user id when present', async () => {
     const { client, args } = await fake('true');
-    await expect(client.gatepassDownload({}, '/tmp/x.pdf')).rejects.toThrow('no IRN');
-    await client.gatepassDownload({ irn: 'abc', userId: 'u1' }, '/tmp/x.pdf');
+    await expect(client.ecopyDownload({}, '/tmp/x.pdf')).rejects.toThrow('no IRN');
+    await client.ecopyDownload({ irn: 'abc', userId: 'u1' }, '/tmp/x.pdf');
     expect(await args()).toBe('ecopy download --irn abc --user-id u1 -o /tmp/x.pdf --no-journal');
   });
 });

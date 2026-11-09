@@ -9,7 +9,7 @@ import { command_client } from './icegate/client';
 import { gmail_gatepasses } from './gmail';
 import { CATALOG } from './icegate/schemas';
 import { parse_date } from './rules';
-import { gaps, list_bills, mark_manual, missing_iecs, open_db, set_iec_name, status_of, type BillKey, type Db } from './store/db';
+import { gaps, list_bills, mark_manual, missing_iecs, open_db, set_iec_name, set_stuffing, status_of, type BillKey, type Db } from './store/db';
 import { gatepass_counts, report_sheets, sync, type RowStatus } from './workflow';
 
 export const ROOT = join(import.meta.dir, '../..');
@@ -19,6 +19,7 @@ const USAGE = `daily-report ${pkg.version} - fetch ICEGATE data into SQLite, the
 Usage: bun run sync [options]
        bun run sync iec-missing          IECs that still need an exporter name
        bun run sync iec-set IEC "NAME"   Approve the exporter name for an IEC
+       bun run sync stuffing-set SBNO DATE VALUE   Override the seal rule: "Factory stuffing" or "ICD stuffing"
        bun run sync mark-manual SBNO DATE Never query this bill again (closed by hand)
        bun run sync fields               Fields that can be exported
 
@@ -112,6 +113,15 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
       if (!bill) throw new Error(`No bill ${sb_no} dated ${date}`);
       mark_manual(db, bill);
       console.log(`${tag('manual')} ${sb_no} is closed by hand`);
+      return 0;
+    }
+    if (command === 'stuffing-set') {
+      const [sb_no, date, value] = rest;
+      if (!sb_no || !date || !['Factory stuffing', 'ICD stuffing'].includes(value ?? '') || rest.length !== 3) throw new Error('Usage: stuffing-set SBNO SB_DATE "Factory stuffing"|"ICD stuffing"');
+      const db = open_db(dbPath), bill = list_bills(db).find(b => b.sb_no === sb_no && b.sb_date === parse_date(date));
+      if (!bill) throw new Error(`No bill ${sb_no} dated ${date}`);
+      set_stuffing(db, bill, value!);
+      console.log(`${tag('stuffing')} ${sb_no} = ${value}`);
       return 0;
     }
     if (command !== undefined) throw new Error(`Unknown command ${command}`);

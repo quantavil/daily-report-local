@@ -1,4 +1,4 @@
-/** SB35 eGatepass: native PDF layout via mupdf, then label-anchored container, size and seal records. No ICEGATE or database code. */
+/** SB35 eGatepass and SB e-copy: native PDF layout via mupdf, then label-anchored values. No ICEGATE or database code. */
 import * as mupdf from 'mupdf';
 import * as rules from '../rules';
 import type { LayoutPage, LayoutSpan } from '../models';
@@ -215,14 +215,15 @@ function movement(pages: LayoutPage[]): Row[] {
   return records;
 }
 
-export interface Gatepass { iec: string; exporter: string; containers: GatepassContainer[] }
+export interface Gatepass { iec: string; exporter: string; facilitation: string; containers: GatepassContainer[] }
+export interface SbCopy { iec: string; exporter: string }
 
-/** The IEC beside `IEC/Br`, the exporter named in `3.Exporter` (each blank when absent) and the ordered container records. A record without a container number rejects the document; blank size or seal stays blank. */
+/** The IEC beside `IEC/Br`, the exporter named in `3.Exporter`, the `14.Facilitation Category` (each blank when absent) and the ordered container records. A record without a container number rejects the document; blank size or seal stays blank. */
 export function parse_gatepass(pdf: Uint8Array, bill: BillKey): Gatepass { return parse_layout(extract_layout(pdf), bill); }
 
-/** Label-anchored: the value of each `3.Exporter` or `IEC/Br` label; differing values reject the document. */
-function single(pages: LayoutPage[], field: 'exporter' | 'iec', what: string): string {
-  const found = new Set(pages.flatMap(page => labels(page, field).map(label => text(cell(page, label, field)).replace(/\s+/g, ' ').trim())).filter(t => !rules.BLANK_VALUES.includes(t.toUpperCase())).map(t => field === 'iec' ? rules.value_token(field, t)! : t));
+/** Label-anchored: the value of each label of the field; differing values reject the document. On the SB e-copy the buyer's name shares the exporter's row, so only the leftmost value is the exporter. */
+function single(pages: LayoutPage[], field: 'exporter' | 'iec' | 'facilitation' | 'sb_exporter', what: string): string {
+  const found = new Set(pages.flatMap(page => labels(page, field).map(label => text(field === 'sb_exporter' ? cell(page, label, field).slice(0, 1) : cell(page, label, field)).replace(/\s+/g, ' ').trim())).filter(t => !rules.BLANK_VALUES.includes(t.toUpperCase())).map(t => field === 'iec' ? rules.value_token(field, t)! : t));
   if (found.size > 1) throw new Error(`PDF names several ${what}`);
   return [...found][0] ?? '';
 }
@@ -233,5 +234,12 @@ export function parse_layout(pages: LayoutPage[], bill: BillKey): Gatepass {
     if (!r.container_no) throw new Error('Movement record has no container number');
     return { container_no: r.container_no, size: r.container_size ?? '', seal: r.customs_seal ?? '' };
   });
-  return { iec: single(pages, 'iec', 'IECs'), exporter: single(pages, 'exporter', 'exporters'), containers };
+  return { iec: single(pages, 'iec', 'IECs'), exporter: single(pages, 'exporter', 'exporters'), facilitation: single(pages, 'facilitation', 'facilitation categories'), containers };
+}
+
+/** The signed SB e-copy, a snapshot taken at filing: only the IEC and the exporter named in `1.EXPORTER'S NAME & ADDRESS` are read; containers and LEO are blank in it. */
+export function parse_sbcopy(pdf: Uint8Array, bill: BillKey): SbCopy {
+  const pages = extract_layout(pdf);
+  check_identity(pages, bill);
+  return { iec: single(pages, 'iec', 'IECs'), exporter: single(pages, 'sb_exporter', 'exporters') };
 }

@@ -1,7 +1,13 @@
 import { describe, expect, test } from 'bun:test';
-import { bill_identity, is_cancelled, label_matches, parse_date, value_token } from '../src/ts/rules';
+import { bill_identity, is_cancelled, label_matches, parse_date, stuffing_of, value_token } from '../src/ts/rules';
 
 describe('ICEGATE policy', () => {
+  test('stuffing: every seal needs a letter for factory stuffing; no seal stays blank', () => {
+    expect(stuffing_of(['BOLT52524390', 'KLIK20805680'])).toBe('Factory stuffing');
+    expect(stuffing_of(['0227948'])).toBe('ICD stuffing');
+    expect(stuffing_of(['BOLT52524390', '0227948'])).toBe('');
+    expect(stuffing_of(['', ''])).toBe('');
+  });
   test('portal placeholders are blank for tokens and stored values alike', () => {
     for (const p of ['N.A.', 'N/A', 'NONE', '-']) expect(value_token('customs_seal', p)).toBeNull();
   });

@@ -64,7 +64,7 @@ describe('gatepass parsing', () => {
   test('reads container rows from real PDF geometry', () => {
     const lines: [string, number, number][] = [['SB No', 20, 760], ['7546404', 100, 760], ['SB Date', 200, 760], ['07/10/2026', 280, 760], ['Port Code', 400, 760], ['INMBD6', 480, 760], ['IEC/Br', 20, 730], ['0123456789', 100, 730],
       ['11. Container', 20, 700], ['12. Seal', 200, 700], ['14. Size', 400, 700], ['ABCU1234567', 20, 680], ['SEAL1', 200, 680], ['40', 400, 680]];
-    expect(parse_gatepass(pdf(lines), bill)).toEqual({ iec: '0123456789', exporter: '', containers: [{ container_no: 'ABCU1234567', size: '40', seal: 'SEAL1' }] });
+    expect(parse_gatepass(pdf(lines), bill)).toEqual({ iec: '0123456789', exporter: '', facilitation: '', containers: [{ container_no: 'ABCU1234567', size: '40', seal: 'SEAL1' }] });
   });
   test('reads the exporter on the row of its 3.Exporter label, not the CHA beside it', () => {
     const head = [span('3.Exporter', 20, 60, 50), span('ACME  EXPORTS PVT LTD', 80, 60, 140), span('4.CHA', 300, 60, 30), span('VISHAL LOGISTICS', 340, 60, 100)];

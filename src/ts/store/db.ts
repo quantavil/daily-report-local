@@ -12,7 +12,7 @@ export type Db = Database;
 /** Portal data that cannot be stored (invalid date, conflicting identity): reported on the bill or run, never guessed. */
 export class DataError extends Error {}
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 7;
 const KIND = new Map<string, string>([...BILL_FIELDS, ...OWN_FIELDS].map(b => [b.col, b.kind]));
 const BILL_COLS = [...KIND.keys(), 'fetched_job', 'fetched_enquiry', 'fetched_gatepass'];
 const ident = (name: string) => { if (!/^[a-z][a-z0-9_]*$/.test(name)) throw new Error(`Bad column ${name}`); return name; };
@@ -30,9 +30,13 @@ export function open_db(path: string, readonly = false): Db {
     const backup = `${path}.bak-v${version}`;
     copyFileSync(path, backup); chmodSync(backup, 0o600);
   };
-  if (version === 4) { // only `shipper` became `exporter`: keep every fetched row
+  if (version === 5 || version === 6) { // only `facilitation` and `sb_job_no` were added: keep every fetched row
     keep_copy();
-    db.transaction(() => { db.run('ALTER TABLE bills RENAME COLUMN shipper TO exporter'); db.run(`PRAGMA user_version = ${SCHEMA_VERSION}`); })();
+    const have = new Set((db.query('PRAGMA table_info(bills)').all() as { name: string }[]).map(c => c.name));
+    db.transaction(() => {
+      for (const col of ['facilitation', 'sb_job_no']) if (!have.has(col)) db.run(`ALTER TABLE bills ADD COLUMN ${col} TEXT NOT NULL DEFAULT ''`);
+      db.run(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+    })();
   } else if (version < SCHEMA_VERSION) {
     keep_copy(); // the fetched tables are rebuilt below
     db.transaction(() => {
@@ -52,6 +56,7 @@ export function open_db(path: string, readonly = false): Db {
     if (path !== ':memory:') chmodSync(path, 0o600);
   }
   db.run('CREATE TABLE IF NOT EXISTS manual (fy TEXT NOT NULL, sb_no TEXT NOT NULL, PRIMARY KEY (fy, sb_no))'); // outside the rebuild, like iec_names
+  db.run("CREATE TABLE IF NOT EXISTS stuffing_overrides (fy TEXT NOT NULL, sb_no TEXT NOT NULL, value TEXT NOT NULL CHECK (value IN ('Factory stuffing', 'ICD stuffing')), PRIMARY KEY (fy, sb_no))"); // the owner's decision beats the seal rule
   return db;
 }
 
@@ -130,6 +135,13 @@ export function set_iec_name(db: Db, iec: string, name: string, source: 'my-iec'
     WHERE excluded.source = 'user' OR iec_names.source <> 'user'`).run(iec, name, source);
 }
 
+/** Records the owner's Type of Stuffing for a bill whose seals mislead the derived rule. */
+export function set_stuffing(db: Db, k: BillKey, value: string): void {
+  if (!get_bill(db, k)) throw new Error(`No bill ${k.sb_no} on ${k.sb_date}`);
+  db.query('INSERT OR REPLACE INTO stuffing_overrides VALUES (?, ?, ?)').run(...key_params(k), value);
+}
+export const stuffing_override = (db: Db, k: BillKey): string => (db.query('SELECT value FROM stuffing_overrides WHERE fy = ? AND sb_no = ?').get(...key_params(k)) as { value: string } | null)?.value ?? '';
+
 /** Closes a bill by hand: it keeps its gaps but is never queried again unless the run is forced. */
 export function mark_manual(db: Db, k: BillKey): void {
   if (!get_bill(db, k)) throw new Error(`No bill ${k.sb_no} on ${k.sb_date}`); // no row, no flag
@@ -156,9 +168,10 @@ export function gaps(db: Db, k: BillKey): string[] {
   return out;
 }
 
-/** Fills blank exporter names from the IEC map. First non-empty wins, so a bill keeps the name it already has. */
+/** Fills blank exporter names from the IEC map, then from a name the gatepasses already gave that IEC when every bill agrees on it (two spellings stay blank for `iec-set`). First non-empty wins, so a bill keeps the name it already has. */
 export function apply_iec_names(db: Db): void {
   db.run(`UPDATE bills SET exporter = (SELECT name FROM iec_names WHERE iec_names.iec = bills.iec) WHERE exporter = '' AND iec <> '' AND EXISTS (SELECT 1 FROM iec_names WHERE iec_names.iec = bills.iec)`);
+  db.run(`UPDATE bills SET exporter = (SELECT MIN(o.exporter) FROM bills o WHERE o.iec = bills.iec AND o.exporter <> '') WHERE exporter = '' AND iec <> '' AND (SELECT COUNT(DISTINCT o.exporter) FROM bills o WHERE o.iec = bills.iec AND o.exporter <> '') = 1`);
 }
 /** IECs on bills that have no name yet, with how many bills wait for it. */
 export const missing_iecs = (db: Db) => db.query(`SELECT iec, COUNT(*) AS bills FROM bills WHERE exporter = '' AND iec <> '' AND iec NOT IN (SELECT iec FROM iec_names) GROUP BY iec ORDER BY bills DESC, iec`).all() as { iec: string; bills: number }[];

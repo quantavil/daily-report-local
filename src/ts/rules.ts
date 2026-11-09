@@ -20,10 +20,13 @@ export function is_cancelled(bill: { curr_status?: string; leo_date?: string; sb
 /** One physical box under two numbers: a gatepass container and an EGM container with the same seal. The EGM, filed later, is the container number the report keeps. */
 export const same_box_by_seal = (a: string, b: string): boolean => !!a && a === b;
 export const DERIVED_LCL = 'LCL';
+/** Owner's rule: an alphanumeric seal (RFID bolt seals such as BOLT, KLIK, ENOS) means factory stuffing. Every seal must carry a letter. Proof: in the owner's old Daily Working Report (Sheet1, ~4000 labelled rows) alphanumeric seals were Factory in 97% of rows and all-numeric seals were ICD in 97%; the exceptions are hand-corrected. Mixed seals stay blank. */
+export const stuffing_of = (seals: string[]): string => { const s = seals.filter(Boolean); return !s.length ? '' : s.every(x => /[A-Za-z]/.test(x)) ? 'Factory stuffing' : s.every(x => /^\d+$/.test(x)) ? 'ICD stuffing' : ''; };
 /** Containers are reused; bills of different exporters share one box (LCL) only when their SB dates are this close. */
 export const LCL_WINDOW_DAYS = 14;
 export const LABELS: Record<string,RegExp> = {
- exporter:/^3\s*\.\s*Exporter$/i, iec:/^IEC\s*\/\s*Br\.?$/i,
+ exporter:/^3\s*\.\s*Exporter$/i, iec:/^IEC\s*\/\s*Br\.?$/i, facilitation:/^14\s*\.\s*Facilitation\s+Category$/i,
+ sb_exporter:/^1\s*\.\s*EXPORTER'?S\s+NAME\s*&\s*ADDRESS$/i,
  inv_no:/^2\s*\.\s*INVOICE\s+No\.?\s*&\s*Dt\.?$/i, leo_date:/^6\s*\.\s*LEO\s+Date\.?$/i,
  container_no:/^11\s*[.,]\s*Container(?:\s+No\.?)?$/i, customs_seal:/^12\s*\.\s*Seal(?:\s+No\.?)?$/i,
  container_size:/^14\s*\.\s*Size$/i, sb_no:/^(?:\d+\s*\.\s*)?(?:SB\s*No\.?|Shipping\s+Bill\s+No\.?)$/i,
@@ -34,8 +37,8 @@ export const ROW_TOLERANCE=3, COLUMN_TOLERANCE=3, MAX_CELL_DEPTH=65, MAX_INLINE_
 export const CONTAINER_FIELDS = ['container_no','customs_seal','container_size'];
 export const CONTAINER_ATTRS = {container_no:'number',container_size:'size',customs_seal:'seal'} as const;
 export const MOVEMENT_STOP = /^(?:\d+\s*\.\s*[A-Za-z]|DECLARATION|NOTE\b|SIGNATURE|PAGE\s+\d)/i;
-export const CELL_LEFT_MARGIN: Record<string,number> = {sb_no:12,sb_date:12,port_code:12,inv_no:40};
-export const INLINE_VALUE_FIELDS = new Set(['exporter','iec','sb_no','sb_date','port_code',...CONTAINER_FIELDS]);
+export const CELL_LEFT_MARGIN: Record<string,number> = {sb_no:12,sb_date:12,port_code:12,inv_no:40,sb_exporter:70};
+export const INLINE_VALUE_FIELDS = new Set(['exporter','iec','facilitation','sb_no','sb_date','port_code',...CONTAINER_FIELDS]);
 export const IDENTITY_FIELDS = ['sb_no','sb_date','port_code'] as const;
 export const SECONDARY_IDENTITY = {anchor:/^1\s*\.\s*SB\s*NO$/i,companion:/^4\s*\.\s*SB\s*DT$/i,field:'sb_date',row_offset:13.5} as const;
 const MONTHS=['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
@@ -77,10 +80,12 @@ export function bill_identity(sb_no: string, sb_date: string, port_code: string)
 }
 export function label_matches(field: string,text: string): boolean { return LABELS[field]?.test(text.trim()) ?? false; }
 export function secondary_identity_label(text:string,role:'anchor'|'companion'): boolean { return SECONDARY_IDENTITY[role].test(text.trim()); }
+const IEC_WITH_BRANCH=/^([A-Z0-9]{10})(?:\s+\d+)?$/;
 export function value_token(field:string,input:string): string|null {
  const text=input.trim(); if (BLANK_VALUES.includes(text.toUpperCase())) return null;
  if (field==='sb_date') return parse_date(text);
- const checks:Record<string,RegExp>={sb_no:/^[0-9]{7}$/,port_code:/^[A-Z0-9]{6}$/,iec:/^[A-Z0-9]{10}$/,container_no:/^[A-Z0-9]{4,15}$/,container_size:/^(?:20|40|45)\.?(?:\s*(?:FT|HC|GP|HQ|G1))?$/i,customs_seal:/^[A-Za-z0-9][A-Za-z0-9/-]*\.?$/};
+ if (field==='iec') { const m=text.match(IEC_WITH_BRANCH); if (!m) throw new Error('Invalid iec'); return m[1]!; } // the SB e-copy prints the branch code after the IEC ("2991000813 0")
+ const checks:Record<string,RegExp>={sb_no:/^[0-9]{7}$/,port_code:/^[A-Z0-9]{6}$/,container_no:/^[A-Z0-9]{4,15}$/,container_size:/^(?:20|40|45)\.?(?:\s*(?:FT|HC|GP|HQ|G1))?$/i,customs_seal:/^[A-Za-z0-9][A-Za-z0-9/-]*\.?$/};
  if (checks[field]&&!checks[field].test(text)) throw new Error(`Invalid ${field}`);
  return field==='container_size' ? text.replace(/\.$/,'').match(/^(?:20|40|45)/)?.[0] ?? text : field==='customs_seal' ? text.replace(/\.$/,'') : text; // some gatepasses print the size or seal with a trailing dot ("40.", "BOLT51634360.")
 }

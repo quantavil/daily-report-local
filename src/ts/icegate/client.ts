@@ -21,7 +21,10 @@ export interface IcegateClient {
   gatepassSearch(bill: Bill): Promise<EcopyRecord[]>;
   /** Every gatepass record dated in `from`..`to` (ISO), whichever bill it belongs to: this is how bills are discovered. */
   gatepassWindow(from: string, to: string): Promise<EcopyRecord[]>;
-  gatepassDownload(record: EcopyRecord, output: string): Promise<void>;
+  /** The SB e-copy records of one bill, searched by SB date alone, once per date, matching the SB number and port. */
+  sbcopySearch(bill: Bill): Promise<EcopyRecord[]>;
+  /** Saves the signed PDF of a gatepass or SB e-copy record. */
+  ecopyDownload(record: EcopyRecord, output: string): Promise<void>;
 }
 
 /** Last day of a `yyyy-mm` month, never after today in India (the portal rejects later dates). */
@@ -53,10 +56,10 @@ export function command_client(env = process.env): IcegateClient {
   }
   const MONTH_AT = 5; // distinct dates in a month from which one month search beats per-day calls (~3 s fixed cost each)
   const windows = new Map<string, Promise<EcopyRecord[]>>(), month_of = new Set<string>();
-  function window(from: string, to: string): Promise<EcopyRecord[]> {
-    const id = `${from}|${to}`;
+  function window(from: string, to: string, kind: 'SB' | 'GATEPASS' = 'GATEPASS'): Promise<EcopyRecord[]> {
+    const id = `${kind}|${from}|${to}`;
     let found = windows.get(id);
-    if (!found) windows.set(id, found = json(EcopyRecords, ['ecopy', 'search', 'GATEPASS', '--from', from, '--to', to]).catch(e => { windows.delete(id); throw e; }));
+    if (!found) windows.set(id, found = json(EcopyRecords, ['ecopy', 'search', kind, '--from', from, '--to', to]).catch(e => { windows.delete(id); throw e; }));
     return found;
   }
   return {
@@ -68,13 +71,14 @@ export function command_client(env = process.env): IcegateClient {
     jobStatus: () => json(JobStatusRows, ['report', 'job-status']),
     myIec: () => json(MyIecRows, ['my-iec']),
     enquiry: b => json(Enquiry, ['enquiry', 'sb', '--location', b.location, '--sb-no', b.sb_no, '--sb-date', b.sb_date]),
-    gatepassWindow: window,
+    gatepassWindow: (from, to) => window(from, to),
     async gatepassSearch(b) {
       const month = b.sb_date.slice(0, 7), whole = month_of.has(month);
       return (await window(whole ? `${month}-01` : b.sb_date, whole ? month_end(month) : b.sb_date)).filter(r => r.docNumber === b.sb_no && r.location === b.location);
     },
-    async gatepassDownload(record, output) {
-      if (!record.irn) throw new IcegateError('gatepass record has no IRN');
+    async sbcopySearch(b) { return (await window(b.sb_date, b.sb_date, 'SB')).filter(r => r.docNumber === b.sb_no && r.location === b.location); },
+    async ecopyDownload(record, output) {
+      if (!record.irn) throw new IcegateError('e-copy record has no IRN');
       await run(['ecopy', 'download', '--irn', record.irn, ...(record.userId ? ['--user-id', record.userId] : []), '-o', output]);
     },
   };

@@ -7,7 +7,7 @@ import { DEFAULT_MAP } from '../src/ts/excel/export-map';
 import { GmailError } from '../src/ts/gmail';
 import { IcegateError, NotReady, type IcegateClient } from '../src/ts/icegate/client';
 import { cells_for, report_sheets, sync, gatepass_counts, type SyncOptions } from '../src/ts/workflow';
-import { fill_bill, fill_containers, get_bill, list_bills, open_db, set_iec_name, shared_containers } from '../src/ts/store/db';
+import { fill_bill, fill_containers, get_bill, list_bills, open_db, set_iec_name, set_stuffing, shared_containers } from '../src/ts/store/db';
 import { pdf } from './fixture';
 
 const k = { sb_no: '7546404', sb_date: '2026-10-07', port_code: 'INMBD6' };
@@ -27,8 +27,9 @@ function fake(over: Partial<IcegateClient> = {}): IcegateClient & { calls: strin
       egmStatusModel: [], igstInvoiceDetailsModel: [{ invoiceNo: 'INV1', invoiceDate: '13-10-2026', igstValueCustom: 'N.A.' }] }; },
     plan: () => {},
     gatepassWindow: async () => { calls.push('window'); return []; },
+    sbcopySearch: async () => { calls.push('sbsearch'); return []; },
     gatepassSearch: async () => { calls.push('search'); return [{ irn: 'IRN1', userId: 'U1' }]; },
-    gatepassDownload: async (_r, out) => { calls.push('download'); await writeFile(out, GATEPASS); },
+    ecopyDownload: async (_r, out) => { calls.push('download'); await writeFile(out, GATEPASS); },
     ...over,
   };
 }
@@ -38,6 +39,12 @@ const run = (client: IcegateClient, extra: Partial<SyncOptions> = {}, db = open_
 const named = (db: ReturnType<typeof open_db>) => set_iec_name(db, '0123456789', 'ACME EXPORTS', 'my-iec');
 
 describe('sync', () => {
+  test('stores the SB e-copy job counter without downloading when IEC and exporter are known', async () => {
+    const db = open_db(':memory:'); named(db);
+    const client = fake({ sbcopySearch: async () => [{ irn: 'IRN9', userId: 'U', jobNumber: '953', docNumber: '7546404', location: 'INMBD6' }] });
+    await run(client, {}, db);
+    expect(get_bill(db, k)!.sb_job_no).toBe('953');
+  });
   test('creates the bill from Job Status, fills it from the portal and names the exporter from the IEC', async () => {
     const db = open_db(':memory:'); named(db);
     const { results } = await run(fake(), {}, db);
@@ -111,12 +118,22 @@ describe('sync', () => {
   });
   test('complete bills are skipped before any portal call', async () => {
     const db = open_db(':memory:'); named(db);
-    await run(fake(), {}, db);
+    const listed = fake({ sbcopySearch: async () => [{ irn: 'IRN9', jobNumber: '953', docNumber: '7546404', location: 'INMBD6' }] });
+    await run(listed, {}, db);
     const client = fake();
     const { results } = await run(client, {}, db);
     expect(results).toEqual([]);
     expect(client.calls).not.toContain('enquiry');
     expect(client.calls).not.toContain('search');
+  });
+  test('a complete bill without its job counter is revisited for the SB e-copy listing only', async () => {
+    const db = open_db(':memory:'); named(db);
+    await run(fake(), {}, db);
+    const client = fake({ sbcopySearch: async () => [{ irn: 'IRN9', jobNumber: '953', docNumber: '7546404', location: 'INMBD6' }] });
+    await run(client, {}, db);
+    expect(get_bill(db, k)!.sb_job_no).toBe('953');
+    expect(client.calls).not.toContain('enquiry');
+    expect(client.calls).not.toContain('download');
   });
   test('a kept gatepass is parsed again without the portal', async () => {
     const db = open_db(':memory:');
@@ -138,7 +155,7 @@ describe('sync', () => {
     expect(client.calls).toContain('search');
   });
   test('a gatepass that is not ready leaves blanks and the bill Partial', async () => {
-    const { results, db } = await run(fake({ gatepassDownload: async () => { throw new NotReady('retry in about 60 minutes'); } }));
+    const { results, db } = await run(fake({ ecopyDownload: async () => { throw new NotReady('retry in about 60 minutes'); } }));
     expect(results[0]![1]).toMatchObject({ status: 'Partial' });
     expect(results[0]![1].detail).toContain('gatepass not ready');
     expect(get_bill(db, k)!.exporter).toBe('');
@@ -171,7 +188,7 @@ describe('sync', () => {
   });
   test('Gmail fallback recovers when the portal download fails', async () => {
     const gmail = async function* () { yield GATEPASS; };
-    const {results} = await run(fake({gatepassDownload: async () => { throw new NotReady('retry later'); }}), {gmail});
+    const {results} = await run(fake({ecopyDownload: async () => { throw new NotReady('retry later'); }}), {gmail});
     expect(results[0]![1].status).toBe('Success');
   });
   test('Gmail candidates that do not match the bill are not kept', async () => {
@@ -251,6 +268,20 @@ describe('report', () => {
     expect([...lcl].map(x => x.split('|')[2]).sort()).toEqual(['SHARED1', 'SHARED1']);
     expect(cells_for(db, k, DEFAULT_MAP, lcl)['Type Shipment (derived)']!.value).toBe('LCL');
     expect(cells_for(db, alone, DEFAULT_MAP, lcl)['Type Shipment (derived)']).toBeUndefined();
+  });
+  test('a stored stuffing override beats the seal rule', () => {
+    const db = open_db(':memory:');
+    fill_bill(db, k, {}); fill_containers(db, k, [{ container_no: 'A1', seal: '0091802' }]);
+    set_stuffing(db, k, 'Factory stuffing');
+    expect(cells_for(db, k, DEFAULT_MAP, new Set())['Type of Stuffing (derived)']!.value).toBe('Factory stuffing');
+    expect(() => set_stuffing(db, { ...k, sb_no: '0' }, 'Factory stuffing')).toThrow();
+  });
+  test('type of stuffing is read from the seals: letters mean factory, plain numbers mean ICD', () => {
+    const db = open_db(':memory:'), icd = { sb_no: '7546405', sb_date: '2026-10-08', port_code: 'INMBD6' };
+    fill_bill(db, k, {}); fill_bill(db, icd, {});
+    fill_containers(db, k, [{ container_no: 'A1', seal: 'BOLT52524390' }]); fill_containers(db, icd, [{ container_no: 'B1', seal: '0227948' }]);
+    expect(cells_for(db, k, DEFAULT_MAP, new Set())['Type of Stuffing (derived)']!.value).toBe('Factory stuffing');
+    expect(cells_for(db, icd, DEFAULT_MAP, new Set())['Type of Stuffing (derived)']!.value).toBe('ICD stuffing');
   });
   test('a container reused months later by another exporter is not LCL', () => {
     const db = open_db(':memory:'), later = { sb_no: '7546407', sb_date: '2026-12-20', port_code: 'INMBD6' };

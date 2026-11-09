@@ -41,7 +41,7 @@ nobody fills anything by hand. This is the maintenance contract; setup and usage
 
 | Module | Responsibility and boundary |
 | --- | --- |
-| `cli.ts` | Argument parsing, output, exit status; subcommands `iec-missing`, `iec-set`, `mark-manual`, `fields` |
+| `cli.ts` | Argument parsing, output, exit status; subcommands `iec-missing`, `iec-set`, `mark-manual`, `stuffing-set`, `fields` |
 | `workflow.ts` | Discovery, per-bill fetch, merge into the database, report plan; no labels or patterns |
 | `rules.ts` | All ICEGATE policy; no network, filesystem or Excel side effects |
 | `models.ts` | Layout types |
@@ -49,7 +49,7 @@ nobody fills anything by hand. This is the maintenance contract; setup and usage
 | `icegate/schemas.ts` | valibot shapes of the JSON and the field catalog (database columns, export picker) |
 | `store/db.ts` | SQLite schema, merge and current-status refresh, IEC-name map, gaps, status; no ICEGATE or Excel code |
 | `gmail.ts` | Read-only Gmail search and PDF attachment retrieval through `gws` |
-| `gatepass/parse.ts` | Native layout via mupdf and rule-driven parsing of the SB35 gatepass; no network, no Excel |
+| `gatepass/parse.ts` | Native layout via mupdf and rule-driven parsing of the SB35 gatepass and the SB e-copy; no network, no Excel |
 | `excel/export-map.ts` | Loads and validates `export-map.json` |
 | `excel/report.ts` | Writes `report.xlsx` from scratch on fflate (atomic rename); no business rules |
 | `server.ts` | `bun run dev` localhost dashboard (`src/ui/index.html`): spawns the CLI, reads `report.db` read-only, saves `export-map.json`; imports no fetch or workflow code |
@@ -61,10 +61,9 @@ nobody fills anything by hand. This is the maintenance contract; setup and usage
   a workbook row. Discovery sees only what these lists show for the logged-in ICEGATE ID: the Job Status report holds the portal's latest ~200 rows and takes no date range; a bill missing from both is not found (a bill filed under another ICEGATE ID is in neither; smaller eGatepass windows return the same set). A gatepass record whose SB date is not shortly before its job date (the portal lists placeholders such as 20-12-2002, mostly in 2024, and gives such a record no IRN to download) takes its identity from the PDF instead: Gmail is searched by SB number and the job date's financial year, and a PDF whose headers name that SB number and port, with a plausible SB date, creates the bill under the PDF's date and is kept; without such a PDF the record is skipped, and an existing bill with that SB number is not searched again. The portal's month window filters on the job date. Public SB enquiry: LEO date, invoices, job number, EGM containers.
   SB35 eGatepass (`ecopy search GATEPASS` for the SB date alone, since gatepass records carry the SB date, matched on `docNumber` = SB number. A batch run asks `plan()` first so a month with several SB dates is one search;
   its job number is a per-day counter, unrelated to the enquiry job number): container,
-  size, seal, the IEC (`IEC/Br`) and the `3.Exporter` name. The gatepass is the only PDF read; there is no SB
-  e-copy. If ICEGATE cannot supply a valid PDF, Gmail searches the bill financial year then later mail; all candidate PDFs must pass the same identity validation. Each parsed gatepass is kept as `data/gatepass/<sb_date>_<sb_no>.pdf` (git-ignored, mode 0600); a rejected one is not. A kept PDF is parsed again instead of searching and downloading. Portal placeholders (`N.A.`, `-`) are blank.
+  size, seal, the IEC (`IEC/Br`) and the `3.Exporter` name. The gatepass is the main PDF read and also gives the `14.Facilitation Category`. The SB e-copy (`ecopy search SB`, a snapshot at filing, available before LEO) is read only as the last resort for IEC and exporter, after the gatepass step left them blank; only those two values are stored and the PDF is not kept. The SB e-copy search row also carries `jobNumber`, the daily job counter (e.g. 953), stored as `sb_job_no` for every bill the SB step visits, with no download needed; it is a different number from the enquiry `Job No` (`gatepass/parse.ts` `parse_sbcopy`). If ICEGATE cannot supply a valid PDF, Gmail searches the bill financial year then later mail; all candidate PDFs must pass the same identity validation. Each parsed gatepass is kept as `data/gatepass/<sb_date>_<sb_no>.pdf` (git-ignored, mode 0600); a rejected one is not. A kept PDF is parsed again instead of searching and downloading. Portal placeholders (`N.A.`, `-`) are blank.
 - Exporter name (database column and report column `Exporter`), first non-empty wins: the IEC-name map (`iec_names`: My IEC or user-approved
-  via `iec-set`), then the gatepass exporter. This is the one human-approved lookup. The
+  via `iec-set`), then a name the gatepasses already gave that same IEC on other bills (used only when all of them agree; two spellings stay blank until `iec-set`), then this bill's own gatepass exporter, then the SB e-copy exporter. IEC maps to exporter name, so each name is learned once and reused. Note from the owner: My IEC lists importer IECs, not export clients, so it fills few exporter names; most come from gatepasses and `iec-set`. A bill with no IEC cannot be named from the map and waits for its gatepass. The
   enquiry IEC is masked and never used. The IEC itself is Job Status first, else the gatepass `IEC/Br`;
   a gap in it triggers a gatepass fetch like the other gatepass fields.
 - Merge rule: first non-empty value wins except current portal status, which is updated by a later non-empty enquiry response. Dates are stored
@@ -73,7 +72,7 @@ nobody fills anything by hand. This is the maintenance contract; setup and usage
   list, portal error-text fields (job, gateway, EGM), the gatepass IRN and PDF hash (the
   `fetched_gatepass` stamp already records the parse), and the bill-level `egm_filed` and
   gateway EGM no/date (duplicates of the per-container `egm_no`/`egm_date`). Do not re-add
-  them without a consumer. Job No and Job Date are kept and exported but do not gate `Success`.
+  them without a consumer. Job No and Job Date are kept but do not gate `Success`; the report column `SB Job No` (in the old Job No position) exports `sb_job_no` (the SB e-copy daily counter), while the Job Status / enquiry `job_no` stays in the database only.
 - Per-run gatepass counts distinguish ICEGATE, Gmail, saved PDFs with unknown origin, unavailable documents and errors. A bill is complete when `store/db.ts` `gaps()` is empty; its status is then `Success`.
 
 ## Identity
@@ -96,8 +95,8 @@ nobody fills anything by hand. This is the maintenance contract; setup and usage
 - Statuses: `Success`, `Partial`, `Cancelled`, `Manual` (closed by hand with `mark-manual`, the user's decision that a field cannot be obtained; never queried again unless `--force`), `Not found` (not known to the portal),
   `Error` (runtime or extraction failure, run output only).
 - Export is last and complete: every bill in the database is written, one `FY yyyy-yy` sheet
-  per year oldest first, rows by SB date. `Type Shipment (derived)` is `LCL` only when a
-  container is shared by bills of different non-empty exporters dated within `LCL_WINDOW_DAYS`; it is computed, never stored.
+  per year oldest first, rows by SB date. `Type of Stuffing (derived)` comes from `rules.ts` `stuffing_of` (letters in every seal mean factory stuffing; all-numeric seals mean ICD stuffing, mixed seals stay blank (97% agreement with the owner's old labelled workbook); the owner's `stuffing-set` override (table `stuffing_overrides`, kept across rebuilds) wins over the rule; computed, never stored). `Type Shipment (derived)` is `LCL` only when a
+  container is shared by bills of different non-empty exporters dated within `LCL_WINDOW_DAYS`; it is computed, never stored. Derived columns get an amber header (users and agents may overwrite them).
 - `--check` is read-only (no network, no report write). `-n` does everything except write the
   report. `--excel` only rewrites the report from the database (no ICEGATE calls; not combinable with `--from`, `--to` or `--force`). `--from` sets the first discovery month. A
   gatepass the portal is still preparing leaves its fields blank for a later run.

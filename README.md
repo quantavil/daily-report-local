@@ -25,6 +25,7 @@ bun run sync --excel            # only rewrite report.xlsx from what report.db h
 bun run sync --from 2025-04-01  # discover bills from that month on
 bun run sync iec-missing        # IECs that still need an exporter name
 bun run sync iec-set IEC "NAME" # approve the exporter name for an IEC
+bun run sync stuffing-set SBNO DATE "Factory stuffing" # override the seal rule for one bill (or "ICD stuffing")
 bun run sync mark-manual SBNO DATE # close a bill by hand: never queried again
 bun run sync fields             # fields that can be exported
 ```
@@ -61,13 +62,17 @@ rebuilt from the database each run, so never edit it by hand.
 | --- | --- |
 | Shipping Bill Date / No, Port Code / ICD Code | bill identity |
 | LEO Date | public SB enquiry |
-| Job No / Job Date | Job Status report, then the enquiry |
-| Exporter | IEC name (My IEC or `iec-set`), else the gatepass `3.Exporter` |
+| SB Job No | `sb_job_no`: `jobNumber` of the SB e-copy search row, the daily job counter at filing. The long Job Status / enquiry job number stays in the database (`job_no`) but is not exported. |
+| Job Date | Job Status report, then the enquiry |
+| Type of Stuffing (derived) | From the container seals, never stored: every seal carries a letter (RFID bolt seals such as BOLT, KLIK, ENOS) is `Factory stuffing`; every seal all-numeric is `ICD stuffing` (both rules agree with 97% of the owner's old labelled workbook); mixed seals or no seal stay blank. |
+| Facilitation Category | Gatepass `14.Facilitation Category` (e.g. GREEN CHANNEL). |
+| Remark(Agent code), Remark(Bill no.) | Blank header-only columns, filled by hand in Excel. |
+| Exporter | IEC name (My IEC or `iec-set`), else the name other gatepasses gave that IEC (if they agree), else the gatepass `3.Exporter`, else the SB e-copy exporter (read only when IEC or exporter is still blank; filed bills have one before LEO). My IEC covers importers, not export clients, so it fills few names. |
 | IEC | Job Status report, else the gatepass `IEC/Br` |
-| Inv No / Inv Date | public SB enquiry |
+| Inv No | public SB enquiry (the invoice date stays in the database, not in the report) |
 | Container No. / Size / Customs Seal Number | EGM list in the enquiry, then the gatepass |
 | EGM No / EGM Date | public SB enquiry, per container |
-| Type Shipment (derived) | `LCL` when a container is shared by bills of different exporters dated within 14 days, else blank |
+| Type Shipment (derived) | `LCL` when a container is shared by bills of different exporters dated within 14 days, else blank. Derived columns have an amber header: users and agents may overwrite them |
 | Current Status | the portal's own status text |
 | Status | `Success`, `Partial`, `Cancelled`, `Manual` or `Not found` |
 
