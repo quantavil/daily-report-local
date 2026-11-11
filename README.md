@@ -103,6 +103,10 @@ Known limits:
 - **Kept in the database on purpose:** bills, invoices and containers; `iec_names` (set with `iec-set`); `stuffing_overrides` (set with `stuffing-set`, wins over the seal rule); `manual` (set with `mark-manual`).
 - **Not stored anywhere but the file:** `Remark(Agent code)`, `Remark(Bill no.)` and `Remark(Own job Y/N)`. The sync writes them blank, so values typed into `report.xlsx` are blanked by the next sync, and so is the green `SB Job No` highlight that follows `Remark(Own job Y/N)`. Copy the file before syncing if you need them.
 
+## Trimming git history
+
+`bun run purge-history` shows how many commits are older than 30 days; `--apply` squashes them into one baseline commit and force-pushes (`--days N` changes the cutoff). A local `backup/pre-purge` branch is kept.
+
 ## Safety
 
 - All ICEGATE calls are read-only. Credentials stay in the `icegate` client.

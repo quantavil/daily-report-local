@@ -7,7 +7,8 @@
   "scripts": {
     "sync": "bun src/ts/cli.ts",
     "dev": "bun src/ts/server.ts",
-    "typecheck": "bun check"
+    "typecheck": "bun check",
+    "purge-history": "bun scripts/purge-history.ts"
   },
   "devDependencies": {
     "@types/bun": "latest"
