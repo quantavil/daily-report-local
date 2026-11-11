@@ -86,6 +86,6 @@ export function value_token(field:string,input:string): string|null {
  if (field==='sb_date') return parse_date(text);
  if (field==='iec') { const m=text.match(IEC_WITH_BRANCH); if (!m) throw new Error('Invalid iec'); return m[1]!; } // the SB e-copy prints the branch code after the IEC ("2991000813 0")
  const checks:Record<string,RegExp>={sb_no:/^[0-9]{7}$/,port_code:/^[A-Z0-9]{6}$/,container_no:/^[A-Z0-9]{4,15}$/,container_size:/^(?:20|40|45)\.?(?:\s*(?:FT|HC|GP|HQ|G1))?$/i,customs_seal:/^[A-Za-z0-9][A-Za-z0-9/-]*\.?$/};
- if (checks[field]&&!checks[field].test(text)) throw new Error(`Invalid ${field}`);
+ if (checks[field]&&!checks[field].test(text)) throw new Error(`Invalid ${field}: ${JSON.stringify(text)}`);
  return field==='container_size' ? text.replace(/\.$/,'').match(/^(?:20|40|45)/)?.[0] ?? text : field==='customs_seal' ? text.replace(/\.$/,'') : text; // some gatepasses print the size or seal with a trailing dot ("40.", "BOLT51634360.")
 }
