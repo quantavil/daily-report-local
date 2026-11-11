@@ -1,6 +1,5 @@
 // Squash every commit older than --days (default 30) on the current branch into one baseline
-// commit, then force-push with lease. Dry run unless --apply. A local backup branch is kept
-// (only the latest one) so a bad run can be undone with `git reset --hard backup/pre-purge`.
+// commit, then force-push with lease and garbage-collect. Dry run unless --apply. No backup is kept.
 import { $ } from 'bun';
 
 const args = process.argv.slice(2);
@@ -25,11 +24,10 @@ const lastOld = commits[keepFrom - 1]!.sha;
 console.log(`${keepFrom} commits older than ${days} days -> 1 baseline; ${commits.length - keepFrom} kept.`);
 if (!apply) { console.log('Dry run. Re-run with --apply.'); process.exit(0); }
 
-for (const b of (await git('branch', '--list', 'backup/pre-purge*', '--format=%(refname:short)')).split('\n').filter(Boolean)) await git('branch', '-D', b);
-await git('branch', 'backup/pre-purge', branch);
 const date = new Date(commits[keepFrom - 1]!.t * 1000).toISOString().slice(0, 10);
 const base = await git('commit-tree', `${lastOld}^{tree}`, '-m', `History up to ${date} squashed`);
 await git('rebase', '--onto', base, lastOld, branch);
 await $`git push --force-with-lease origin ${branch}`;
 await $`git reflog expire --expire=now --all`.quiet();
-console.log('Done. Backup branch backup/pre-purge kept locally; delete it and run `git gc --prune=now` to reclaim space.');
+await $`git gc --prune=now --quiet`.quiet();
+console.log('Done.');

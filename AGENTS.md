@@ -130,6 +130,6 @@ nobody fills anything by hand. This is the maintenance contract; setup and usage
   (added with `git add -f`; other `*.xlsx` stay ignored) and `data/missing-from-login.txt`. They hold client data.
   Git-ignored: `data/gatepass/`, `.env`, `*.pdf`, backups and every other `*.xlsx`. Never commit PDFs,
   live documents or secrets.
-- Git history is trimmed by `bun run purge-history [--days 30] [--apply]` (`scripts/purge-history.ts`): commits older than 30 days become one baseline commit, then a force-push with lease; dry run without `--apply`, local `backup/pre-purge` branch kept. Old clones and forks keep the old data.
+- Git history is trimmed by `bun run purge-history [--days 30] [--apply]` (`scripts/purge-history.ts`): commits older than 30 days become one baseline commit, then a force-push with lease; dry run without `--apply`, no backup kept. Old clones and forks keep the old data.
 - Done means: `bun test` and `bun check` pass; no dead code, superseded files or unused
   dependencies; `AGENTS.md` and `README.md` match the implemented behavior.
