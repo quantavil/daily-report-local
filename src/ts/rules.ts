@@ -103,7 +103,7 @@ export function value_token(field:string,input:string): string|null {
 
 /** Gmail evidence. A checklist the owner attaches carries its job token in the file name, e.g. `CheckList-EXP-2627-70.pdf`; `VIDE-EXP-…` is the owner's too. */
 export const JOB_TOKEN = /(?:VIDE-)?EXP-\d{4}-\d+/gi;
-export const OWN_ADDRESS = /vishallogistics|quantavil@gmail\.com/i, PORTAL_ADDRESS = /icegate/i;
+export const OWN_ADDRESS = /vishallogistics|quantavil@gmail\.com/i, PORTAL_ADDRESS = /icegate/i, NOT_AGENT_ADDRESS = /^bhopalmehta83@gmail\.com$/i; // NOT_AGENT_ADDRESS: not an exporter or agent, never an agent email
 const job_number = (token: string) => token.replace(/^VIDE-/, '');
 /** Distinct job tokens in attachment file names (`EXP-2627-70` and `VIDE-EXP-2627-70` are one job), upper case, in order of appearance. */
 export const job_tokens = (filenames: string[]): string[] => { const seen = new Map<string, string>(); for (const t of filenames.flatMap(f => f.match(JOB_TOKEN) ?? [])) if (!seen.has(job_number(t.toUpperCase()))) seen.set(job_number(t.toUpperCase()), t.toUpperCase()); return [...seen.values()]; };
@@ -117,7 +117,7 @@ export function own_job_of(tokens: string[], has_mail: boolean, has_leo: boolean
 export function agent_address(to: string[], cc: string[] = []): string {
   for (const list of [to, cc]) {
     const count = new Map<string, number>();
-    for (const a of list.map(x => x.toLowerCase()).filter(x => !OWN_ADDRESS.test(x) && !PORTAL_ADDRESS.test(x))) count.set(a, (count.get(a) ?? 0) + 1);
+    for (const a of list.map(x => x.toLowerCase()).filter(x => !OWN_ADDRESS.test(x) && !PORTAL_ADDRESS.test(x) && !NOT_AGENT_ADDRESS.test(x))) count.set(a, (count.get(a) ?? 0) + 1);
     const ranked = [...count].sort((x, y) => y[1] - x[1]);
     if (ranked.length) return ranked.filter(r => r[1] === ranked[0]![1]).map(r => r[0]).join(', ');
   }
