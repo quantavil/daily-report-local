@@ -53,7 +53,7 @@ the only hand-typed cells are the three `Remark(...)` columns and any derived co
 | `gatepass/parse.ts` | Native layout via mupdf and rule-driven parsing of the SB35 gatepass and the SB e-copy; no network, no Excel |
 | `excel/export-map.ts` | Loads and validates `export-map.json` |
 | `excel/read.ts` | Reads cell text back from a workbook (ours or one saved by Excel/LibreOffice); no database, no rules |
-| `excel/report.ts` | Writes `report.xlsx` from scratch on fflate (atomic rename), including the `highlight` Excel rule (green target cell where the flag column is Y) and the Y/N dropdown; no business rules |
+| `excel/report.ts` | Writes `report.xlsx` from scratch on fflate (atomic rename), and `report.csv` beside it from the same sheet rows (all sheets in order, same headers and cells, dates as ISO text; never read back), including the `highlight` Excel rule (green target cell where the flag column is Y) and the Y/N dropdown; no business rules |
 | `server.ts` | `bun run dev` localhost dashboard (`src/ui/index.html`): spawns the CLI, reads `report.db` read-only, saves `export-map.json`; imports no fetch or workflow code |
 
 ## Data sources

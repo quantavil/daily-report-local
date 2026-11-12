@@ -4,7 +4,7 @@ import { mkdtemp, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { read_sheets } from '../../src/ts/excel/read';
-import { build_report, write_report, type Sheet } from '../../src/ts/excel/report';
+import { build_csv, build_report, write_report, type Sheet } from '../../src/ts/excel/report';
 
 const sheets: Sheet[] = [{ name: 'FY 2026-27', headers: ['Shipping Bill Date', 'Exporter', 'Container No.'], derived: ['Container No.'], rows: [{ 'Shipping Bill Date': { value: '2026-10-07', date: true }, 'Exporter': { value: 'A & B <LTD>' }, 'Container No.': { value: 'X1\nX2' } }, {}] }];
 
@@ -33,10 +33,10 @@ test('the highlight flag colours the target column live and limits the flag colu
 test('the report is replaced atomically, leaves no temporary file and keeps the previous file as .bak', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'daily-report-')), path = join(dir, 'report.xlsx');
   await write_report(path, sheets);
-  expect(await readdir(dir)).toEqual(['report.xlsx']); // nothing to back up yet
+  expect((await readdir(dir)).sort()).toEqual(['report.csv', 'report.xlsx']); // nothing to back up yet
   const first = await readFile(path);
   await write_report(path, [{ ...sheets[0]!, name: 'FY 2025-26' }]);
-  expect((await readdir(dir)).sort()).toEqual(['report.xlsx', 'report.xlsx.bak']);
+  expect((await readdir(dir)).sort()).toEqual(['report.csv', 'report.csv.bak', 'report.xlsx', 'report.xlsx.bak']);
   expect(await readFile(`${path}.bak`)).toEqual(first);
   expect(Object.keys(unzipSync(new Uint8Array(await readFile(path))))).toContain('xl/workbook.xml');
 });
@@ -60,4 +60,12 @@ test('read_sheets understands the shared strings an Excel save produces; a missi
   expect(await read_sheets(join(dir, 'none.xlsx'))).toBeNull();
   await writeFile(join(dir, 'broken.xlsx'), 'not a zip');
   await expect(read_sheets(join(dir, 'broken.xlsx'))).rejects.toThrow('left untouched');
+});
+
+test('the CSV has the workbook headers and rows, all sheets in order, quoting only where needed, dates as ISO text', async () => {
+  const two: Sheet[] = [sheets[0]!, { ...sheets[0]!, name: 'FY 2027-28', rows: [{ 'Shipping Bill Date': { value: '2027-04-02', date: true }, Exporter: { value: 'Say "hi", Ltd' }, 'Container No.': { value: 'X3' } }] }];
+  expect(build_csv(two)).toBe('Shipping Bill Date,Exporter,Container No.\n2026-10-07,A & B <LTD>,"X1\nX2"\n,,\n2027-04-02,"Say ""hi"", Ltd",X3\n');
+  const dir = await mkdtemp(join(tmpdir(), 'daily-report-')), path = join(dir, 'report.xlsx');
+  await write_report(path, two);
+  expect(await readFile(join(dir, 'report.csv'), 'utf8')).toBe(build_csv(two));
 });

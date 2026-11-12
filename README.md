@@ -38,6 +38,9 @@ gaps, IECs waiting for a name), a picker for which database field goes into whic
 column, and Sync / Preview / Check / Write report. It runs the same CLI, only listens on this
 computer, and does one run at a time.
 
+Every time `report.xlsx` is written, `report.csv` is written beside it from the same rows: the same headers and cells, all financial years in one file, dates as `YYYY-MM-DD`. It is for programs to read and is never read back, so edit the workbook, not the CSV.
+
+
 `bun run sync -h` lists every option. Defaults come from `.env` (`EXCEL_PATH`,
 `DAILY_REPORT_DATA_DIR`).
 

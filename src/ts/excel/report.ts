@@ -64,12 +64,26 @@ export function build_report(sheets: Sheet[]): Uint8Array {
   return zipSync(files);
 }
 
-/** Atomic replace. The file being replaced is first copied to `<path>.bak` (git-ignored), the one backup kept. */
-export async function write_report(path: string, sheets: Sheet[]): Promise<void> {
-  const temporary = join(dirname(path), `.report-${randomBytes(6).toString('hex')}.tmp.xlsx`);
+/** The same rows as the workbook, all financial years in sheet order, as plain CSV text (dates as ISO text). */
+export function build_csv(sheets: Sheet[]): string {
+  const headers = sheets[0]?.headers ?? [];
+  const field = (t: string) => /[",\r\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+  const line = (values: string[]) => values.map(field).join(',');
+  return [line(headers), ...sheets.flatMap(s => s.rows.map(r => line(headers.map(h => r[h]?.value ?? ''))))].join('\n') + '\n';
+}
+
+/** Writes `body` to a temporary file in the same folder, then renames it over `path`. A file it replaces is first copied to `<path>.bak` (git-ignored), the one backup kept. */
+async function replace_file(path: string, body: Uint8Array | string): Promise<void> {
+  const temporary = join(dirname(path), `.report-${randomBytes(6).toString('hex')}.tmp`);
   try {
-    await writeFile(temporary, build_report(sheets));
+    await writeFile(temporary, body);
     await copyFile(path, `${path}.bak`).catch(error => { if (error.code !== 'ENOENT') throw error; });
     await rename(temporary, path);
   } finally { await unlink(temporary).catch(() => {}); }
+}
+
+/** Atomic replace of the workbook and of the matching `.csv` beside it. */
+export async function write_report(path: string, sheets: Sheet[]): Promise<void> {
+  await replace_file(path, build_report(sheets));
+  await replace_file(path.replace(/\.xlsx$/i, '') + '.csv', build_csv(sheets));
 }
