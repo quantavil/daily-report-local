@@ -1,0 +1,20 @@
+# Secrets & Local Credentials (NEVER COMMIT)
+.env
+.cache/
+data/gatepass/
+*.pdf
+# Local notes with real client identifiers
+FIELD-SOURCES.md
+
+# Generated report and backups (client data)
+*.xlsx
+*.bak*
+.~lock.*#
+
+# OS / Editor
+.DS_Store
+*.swp
+*.swo
+.vscode/
+.idea/
+node_modules/

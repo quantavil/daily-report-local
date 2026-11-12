@@ -1,0 +1,7 @@
+# Shipping bills in Daily Working Report.xlsx absent from report.xlsx.
+# All bills from FY 2024-25, FY 2025-26 and FY 2026-27 are present in report.xlsx.
+# 2 bills from FY 2023-24 remain absent (no gatepass found in mail / unverified).
+# Dates, ports and job numbers without an enquiry annotation are from the old workbook.
+# date	SB no	port	job no	status
+2023-06-09	1654416	INMBD6	154	unverified
+2024-03-22	8541183	INHDD6	-	unverified

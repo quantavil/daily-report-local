@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Daily Report</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23111'/%3E%3Cpath d='M4 8.5l2.5 2.5L12 5.5' fill='none' stroke='%23fff' stroke-width='2'/%3E%3C/svg%3E">
+<script>try { document.documentElement.dataset.theme = localStorage.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); } catch { document.documentElement.dataset.theme = 'light'; }</script>
+<style>
+:root { color-scheme: light; --bg:#f3f5f2; --card:#fff; --ink:#182a27; --muted:#6a7d75; --edge:#dfe8e1; --line:#e8eee9; --well:#f5f8f5; --green:#238b68; --lime:#cce867; --hero:#153c33; --shadow:0 8px 30px #223d2b08; --red:#fbe9e7; --red-ink:#9a3932; --yellow:#fbf3dd; --yellow-ink:#846519; --blue:#e5f0f8; --blue-ink:#426f96; --grey:#edf1ed; --grey-ink:#65766d; --sans:system-ui,-apple-system,'Segoe UI',sans-serif; --mono:ui-monospace,SFMono-Regular,Consolas,monospace; }
+:root[data-theme=dark] { color-scheme:dark; --bg:#101c19; --card:#1a2c26; --ink:#e6f0e9; --muted:#a2b8aa; --edge:#354b40; --line:#304339; --well:#20352c; --green:#76c99e; --lime:#cce867; --hero:#183e33; --shadow:0 8px 30px #0002; --red:#422b29; --red-ink:#f4a69f; --yellow:#413b26; --yellow-ink:#e3ca7e; --blue:#263d4a; --blue-ink:#a4cce6; --grey:#2c3b32; --grey-ink:#b3c4b7; }
+*{box-sizing:border-box} [hidden]{display:none!important} html{scroll-behavior:smooth} body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 var(--sans);-webkit-font-smoothing:antialiased} main{max-width:1280px;margin:auto;padding:28px 32px 80px} button,input{font:inherit} button{cursor:pointer} button:disabled{opacity:.48;cursor:not-allowed} :focus-visible{outline:3px solid #9dcf77;outline-offset:3px} svg{width:16px;height:16px;fill:currentColor;flex:none}
+.top{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:22px}.brand{display:flex;align-items:center;gap:11px;font-weight:800;letter-spacing:-.025em;font-size:17px}.brand:before{content:'DR';display:grid;place-items:center;width:36px;height:36px;background:var(--hero);color:#d4ec9a;border-radius:11px;font-size:12px;letter-spacing:0}.brand small{font-size:12px;font-weight:500;color:var(--muted);padding-left:12px;border-left:1px solid var(--edge);letter-spacing:0}.brand small:empty{display:none}.right{display:flex;align-items:center;gap:10px}.icon{width:40px;height:40px;border:1px solid var(--edge);border-radius:12px;background:var(--card);color:var(--ink);display:grid;place-items:center}.icon:hover{background:var(--well)} :root[data-theme=dark] .sun,:root:not([data-theme=dark]) .moon{display:none}
+.card{background:var(--card);border:1px solid var(--edge);border-radius:18px;box-shadow:var(--shadow);margin-bottom:16px;min-width:0}.hero{background:var(--hero);color:#fff;border-radius:24px;padding:34px 38px;position:relative;overflow:hidden;display:flex;justify-content:space-between;align-items:flex-end;gap:24px}.hero:after{content:'';position:absolute;width:330px;height:330px;border:1px solid #ffffff20;border-radius:50%;right:-60px;top:-170px;box-shadow:0 0 0 42px #ffffff08,0 0 0 90px #ffffff08;pointer-events:none}.hero>div{position:relative;z-index:1}.eyebrow{margin:0 0 10px;text-transform:uppercase;letter-spacing:.15em;font-size:11px;font-weight:800;color:var(--muted)}.hero .eyebrow{color:#b7dcb7}.hero h1{font-size:clamp(30px,4vw,46px);line-height:1.1;letter-spacing:-.04em;margin:0 0 9px}.hero .intro{margin:0;color:#c7dcd3;max-width:54ch}.cta{display:flex;gap:9px;flex-wrap:wrap}.cta button, #stop{display:inline-flex;justify-content:center;align-items:center;gap:8px;min-height:46px;border-radius:11px;padding:10px 19px;font-weight:750;border:1px solid #ffffff45;background:#ffffff12;color:#fff;transition:transform .15s,background .15s}.cta button:hover:not(:disabled){background:#ffffff24}.cta button:active:not(:disabled),#stop:active:not(:disabled){transform:translateY(1px)}.cta button.primary{background:var(--lime);border-color:var(--lime);color:#19382b}.cta button.primary:hover:not(:disabled){background:#dbf28a}
+#home{padding:0;background:transparent;border:0;box-shadow:none}.overview{display:grid;grid-template-columns:1.2fr 1fr 1fr 1fr;gap:16px;margin:18px 0}.metric-card{background:var(--card);border:1px solid var(--edge);border-radius:18px;padding:22px 24px;box-shadow:var(--shadow);min-width:0}.metric-label{color:var(--muted);font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.08em}.big{font-size:39px;line-height:1.15;font-weight:780;letter-spacing:-.04em;font-variant-numeric:tabular-nums;margin:9px 0 5px}.sub,.metric-sub{color:var(--muted);font-size:13px;margin:0}
+.opts{margin-top:18px;background:var(--card);border:1px solid var(--edge);border-radius:18px;box-shadow:var(--shadow)}.opts summary{cursor:pointer;padding:20px 24px;color:var(--ink);font-weight:750}.opts summary::marker{color:var(--green)}.opts[open] summary{border-bottom:1px solid var(--line)}.opts .body{padding:22px 24px 24px}.fields{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;align-items:end}label{display:block;font-size:11px;font-weight:750;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:7px}label.check{display:flex;align-items:center;gap:10px;color:var(--ink);text-transform:none;letter-spacing:0;font-size:13px;margin:0;padding:12px;border:1px solid var(--edge);border-radius:10px;background:var(--well);min-height:45px;cursor:pointer}input[type=checkbox]{width:16px;height:16px;accent-color:var(--green);margin:0}input[type=text],select{width:100%;min-width:0;color:var(--ink);background:var(--well);border:1px solid var(--edge);border-radius:10px;padding:11px 12px}input[type=text]:focus{outline:2px solid var(--green);outline-offset:1px}.tools{display:flex;gap:24px;margin-top:18px;flex-wrap:wrap}.link{border:0;background:none;padding:0;color:var(--green);font-size:13px;font-weight:750;text-align:left}.link:hover:not(:disabled){text-decoration:underline;text-underline-offset:3px}.banner{margin-top:16px;padding:13px 16px;border-radius:10px;background:var(--red);color:var(--red-ink);font-size:14px}
+#live{padding:24px;margin-top:24px}.live-head{display:flex;justify-content:space-between;gap:16px}.live-head .big{font-size:32px}.live-head .eyebrow{margin-bottom:0}#stop{background:var(--well);border-color:var(--edge);color:var(--ink);min-height:40px}.bar{height:8px;background:var(--line);border-radius:6px;overflow:hidden;margin:20px 0 10px}.bar i{display:block;height:100%;width:0;background:var(--green);border-radius:6px;transition:width .4s}.feed{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}#outcome{border-top:1px solid var(--line);padding-top:15px;margin-top:18px}.pill{display:inline-block;border-radius:7px;padding:4px 9px;font-size:11px;font-weight:750;white-space:nowrap;background:var(--grey);color:var(--grey-ink)}.Success,.ok{background:#e6f4e9;color:#26714d}.Partial,.missing,.busy{background:var(--yellow);color:var(--yellow-ink)}.Error,.fail{background:var(--red);color:var(--red-ink)}.Notfound{background:var(--blue);color:var(--blue-ink)}.Cancelled{background:var(--grey);color:var(--grey-ink)}
+.results{padding:0;overflow:hidden}.tabs{display:flex;gap:0;border-bottom:1px solid var(--line);padding:0 10px;overflow-x:auto}.tabs button{border:0;border-bottom:2px solid transparent;background:none;color:var(--muted);padding:16px 15px;font-size:13px;font-weight:700;white-space:nowrap}.tabs button[aria-selected=true]{color:var(--green);border-bottom-color:var(--green)}.tabs span{color:var(--muted);font-weight:500;margin-left:7px}ul{list-style:none;margin:0;padding:0}li.item{display:grid;grid-template-columns:112px 1fr;gap:12px;padding:17px 24px;border-bottom:1px solid var(--line)}li.item:last-child{border-bottom:0}li.item:hover{background:var(--well)}li .who{font-weight:750;font-variant-numeric:tabular-nums}li .where{color:var(--muted);font-size:13px;margin-left:8px}li .why{color:var(--muted);font-size:13px;margin-top:3px}li.more,.empty{padding:22px 24px;color:var(--muted);font-size:13px}.empty{text-align:center}details.log{padding:0}details.log summary{cursor:pointer;padding:18px 24px;color:var(--green);font-size:13px;font-weight:750}details.log[open] summary{border-bottom:1px solid var(--line)}pre{margin:0;padding:18px 24px;background:var(--well);overflow:auto;max-height:340px;font:12px/1.65 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
+@media(max-width:900px){.overview{grid-template-columns:repeat(2,1fr)}.fields{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:560px){main{padding:20px 16px 60px}.brand small{display:none}.hero{padding:27px 23px;display:block}.hero .cta{margin-top:24px}.cta button{flex:1}.overview{gap:10px}.metric-card{padding:17px}.big{font-size:32px}.fields{grid-template-columns:1fr}.opts .body{padding:18px}.opts summary{padding:17px 18px}li.item{grid-template-columns:1fr;padding:15px 18px}.hero h1{font-size:32px}}@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
+/* Compact workspace at laptop widths. */
+.action-area{max-width:340px}.action-help{margin:24px 0 0;color:var(--muted);font-size:12px;line-height:1.5}
+main{max-width:1180px}.top{margin-bottom:15px}.hero{padding:28px 34px;align-items:center;min-height:190px}.hero h1{font-size:clamp(30px,3.4vw,42px);margin-bottom:8px}.hero h1 em{font-family:Georgia,serif;font-weight:400;color:#cce867}.hero .intro{font-size:14px}.cta{flex-wrap:nowrap;flex-shrink:0}.cta button{white-space:nowrap}
+.overview{display:block;margin:14px 0 0;background:var(--card);border:1px solid var(--edge);border-radius:16px;padding:21px 24px}.overview-head{display:flex;justify-content:space-between;align-items:end;gap:10px}.overview-head h2{font-size:18px;letter-spacing:-.03em;margin:3px 0 0}.overview-note{font-size:12px;color:var(--muted)}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin:18px 0}.metric-card{background:none;border:0;border-left:1px solid var(--line);box-shadow:none;border-radius:0;padding:0 18px}.metric-card:first-child{border:0;padding-left:0}.metric-card .big{font-size:32px;margin:8px 0 3px}.metric-label{font-size:10px}.metric-sub{font-size:12px}.primary-metric .big{color:var(--green)}.distribution{height:6px;display:flex;background:var(--line);border-radius:5px;overflow:hidden}.distribution i{height:100%;display:block}.distribution i:nth-child(1){background:var(--green)}.distribution i:nth-child(2){background:#b5cf68}.distribution i:nth-child(3){background:#98aa9f}.legend{display:flex;gap:17px;margin-top:9px;color:var(--muted);font-size:11px}.legend i{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);margin-right:5px}.legend span:nth-child(2) i{background:#b5cf68}.legend span:nth-child(3) i{background:#98aa9f}.opts{margin-top:14px}
+@media(max-width:760px){.hero{align-items:flex-start}.cta{flex-direction:column}.metric-card{padding:0 12px}.metric-card .big{font-size:27px}.metric-sub{line-height:1.3}}
+@media(max-width:560px){.hero{padding:24px;display:block;min-height:0}.hero h1{font-size:31px}.hero .cta{margin-top:20px;flex-direction:row}.cta button{font-size:13px;padding:10px}.overview{padding:18px}.metrics{grid-template-columns:repeat(2,minmax(0,1fr));row-gap:18px}.metric-card:nth-child(3){border:0;padding-left:0}.overview-note{display:none}.legend{gap:11px;flex-wrap:wrap}}
+</style>
+</head>
+<body>
+<main>
+  <div class="top">
+    <div class="brand">Daily Report</div>
+    <div class="right">
+      <span id="state" class="pill" hidden></span>
+      <button class="icon" id="theme" aria-label="Switch light or dark theme" title="Switch theme">
+        <svg class="sun" viewBox="0 0 16 16"><circle cx="8" cy="8" r="3.2"/><path d="M8 .8v2M8 13.2v2M.8 8h2M13.2 8h2M2.9 2.9l1.4 1.4M11.7 11.7l1.4 1.4M2.9 13.1l1.4-1.4M11.7 4.3l1.4-1.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        <svg class="moon" viewBox="0 0 16 16"><path d="M13.5 9.6A5.8 5.8 0 0 1 6.4 2.5a5.8 5.8 0 1 0 7.1 7.1z"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <section class="card" id="home">
+    <div class="hero">
+      <div>
+        <p class="eyebrow">ICEGATE · Daily working report</p>
+        <h1>Your reports,<br><em>in good order.</em></h1>
+        <p class="intro">A clear view of your shipping bills, from ICEGATE to report.xlsx.</p>
+      </div>
+      <div class="action-area">
+        <div class="cta">
+          <button class="primary" id="sync"><svg viewBox="0 0 16 16"><path d="M4 2.5v11l9-5.5z"/></svg><span id="syncLabel">Sync</span></button>
+          <button id="preview" title="Fetch everything without writing report.xlsx">Preview run</button>
+        </div>
+      </div>
+    </div>
+    <section class="overview" aria-label="Overview">
+      <div class="overview-head"><div><span class="scope-index">01 / OVERVIEW</span><h2>Database at a glance</h2></div><span class="overview-note">report.db</span></div>
+      <div class="metrics">
+        <div class="metric-card primary-metric"><div class="metric-label" id="eyebrow">Bills to sync</div><div class="big" id="big">&ndash;</div><p class="metric-sub" id="bigSub">Reading the database...</p></div>
+        <div class="metric-card"><div class="metric-label">Already done</div><div class="big" id="doneCount">&ndash;</div><p class="metric-sub">Complete bills</p></div>
+        <div class="metric-card"><div class="metric-label">Cancelled</div><div class="big" id="cancelledCount">&ndash;</div><p class="metric-sub">Excluded from sync</p></div>
+        <div class="metric-card"><div class="metric-label">Total bills</div><div class="big" id="errorCount">&ndash;</div><p class="metric-sub">In report.db</p></div>
+      </div>
+      <div class="distribution" aria-hidden="true"><i id="completedBar"></i><i id="pendingBar"></i><i id="excludedBar"></i></div>
+      <div class="legend"><span><i></i>Done</span><span><i></i>To sync</span><span><i></i>Cancelled</span></div>
+    </section>
+    <div class="banner" id="error" hidden></div>
+    <details class="opts">
+      <summary>Additional actions</summary>
+      <div class="body"><div class="tools">
+        <button class="link" id="check" title="List bills that still have empty fields. Reads report.db only.">List missing fields</button>
+        <button class="link" id="write" title="Rewrite report.xlsx from what report.db already holds. No network.">Write report.xlsx from database</button>
+      </div></div>
+    </details>
+    <details class="opts" id="dbBox">
+      <summary>Database <span id="dbCount"></span></summary>
+      <div class="body"><p class="sub" id="iecNote" hidden></p><ul id="dbList"></ul></div>
+    </details>
+    <details class="opts" id="mapBox">
+      <summary>Columns written to Excel</summary>
+      <div class="body"><div id="mapRows"></div><div class="tools"><button class="link" id="addMap">Add a column</button><button class="link" id="saveMap">Save</button></div><p class="sub" id="mapMsg"></p></div>
+    </details>
+  </section>
+
+  <section class="card" id="live" hidden>
+    <div class="live-head">
+      <div>
+        <p class="eyebrow" id="liveLabel"></p>
+        <div class="big" id="liveNum"></div>
+      </div>
+      <button id="stop"><svg viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="1"/></svg>Stop</button>
+    </div>
+    <div class="bar" id="bar"><i id="fill"></i></div>
+    <p class="sub" id="liveNow"></p>
+    <div class="feed" id="feed"></div>
+    <p class="sub" id="outcome" hidden></p>
+  </section>
+
+  <section class="card results" id="results" hidden>
+    <div class="tabs" id="tabs" role="tablist"></div>
+    <ul id="list"></ul>
+    <p class="empty" id="empty" hidden></p>
+  </section>
+
+  <details class="card log" id="logBox" hidden>
+    <summary>Full log</summary>
+    <pre id="log"></pre>
+  </details>
+  <p class="action-help">Sync creates bills from ICEGATE, fetches what they lack into report.db, then rewrites report.xlsx. Preview does the same without writing report.xlsx.</p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const FIELD = { iec: 'IEC', exporter: 'Exporter', invoice: 'Invoice', leo_date: 'LEO date', container: 'Container', size: 'Size', seal: 'Seal', sb_date: 'SB date', port_code: 'Port code' };
+const ROW = /^\[SB (\d{7})\] (\d{4}-\d{2}-\d{2})\s+(Success|Partial|Not found|Cancelled|Error)\s*(.*)$/;
+const CHECK = /^\[check\] (\d+) incomplete · (\d+) cancelled · (\d+) bills$/;
+const cls = name => name.replace(' ', '');
+const num = n => n.toLocaleString('en-IN');
+const S = { todo: 0, cancelled: 0, bills: -1, runId: -1, seen: 0, polling: false, running: false, rows: [], tab: 'attention', total: 0, done: 0, feed: [], only: '', started: 0, finish: '' };
+
+/* ---------- overview (what is waiting) ---------- */
+async function loadOverview() {
+  let lines = [];
+  try { lines = (await (await fetch('/api/overview')).json()).lines; } catch { $('bigSub').textContent = 'Could not reach the server.'; return; }
+  let error = '';
+  for (const line of lines) {
+    let m;
+    if ((m = CHECK.exec(line))) Object.assign(S, { todo: +m[1], cancelled: +m[2], bills: +m[3] });
+    else if (/^No database yet/.test(line)) Object.assign(S, { todo: 0, cancelled: 0, bills: 0 });
+    else if (/^ERROR/.test(line)) error = line.replace(/^ERROR:\s*/, '');
+  }
+  $('error').hidden = !error; $('error').textContent = error;
+  if (error) { $('big').textContent = '-'; $('bigSub').textContent = 'Could not read the database.'; }
+  renderHome();
+}
+
+function renderHome() {
+  if (S.bills >= 0) {
+    const { todo, cancelled, bills } = S, done = Math.max(0, bills - todo - cancelled), total = Math.max(1, bills);
+    $('big').textContent = num(todo);
+    $('bigSub').textContent = bills ? (todo ? 'Ready to fetch from ICEGATE' : 'No unfinished bills') : 'Run a sync to create bills';
+    $('doneCount').textContent = num(done); $('cancelledCount').textContent = num(cancelled); $('errorCount').textContent = num(bills);
+    $('completedBar').style.width = done / total * 100 + '%'; $('pendingBar').style.width = todo / total * 100 + '%'; $('excludedBar').style.width = cancelled / total * 100 + '%';
+  }
+  renderCta();
+}
+
+function renderCta() {
+  $('syncLabel').textContent = S.todo ? `Sync ${num(S.todo)} bills` : 'Sync';
+  for (const id of ['sync', 'preview', 'check', 'write']) $(id).disabled = S.running;
+}
+
+/* ---------- results ---------- */
+function why(detail) {
+  return detail.split('; ').filter(Boolean).map(part => {
+    const m = /^missing: (.*)$/.exec(part);
+    return m ? `Empty: ${m[1].split(', ').map(f => FIELD[f] ?? f).join(', ')}` : part;
+  });
+}
+
+const needsAttention = r => r.status !== 'Success' && r.status !== 'Cancelled';
+function renderResults() {
+  const tabs = { attention: S.rows.filter(needsAttention), done: S.rows.filter(r => r.status === 'Success'), all: S.rows };
+  $('tabs').replaceChildren(...Object.entries({ attention: 'Needs attention', done: 'Done', all: 'All' }).map(([key, label]) => {
+    const b = document.createElement('button'); b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', S.tab === key);
+    b.append(label); const c = document.createElement('span'); c.textContent = tabs[key].length; b.append(c);
+    b.onclick = () => { S.tab = key; renderResults(); };
+    return b;
+  }));
+  const shown = tabs[S.tab];
+  $('list').replaceChildren(...shown.slice(0, 300).map(r => {
+    const li = document.createElement('li'); li.className = 'item';
+    const pill = document.createElement('div'), p = document.createElement('span'); p.className = 'pill ' + cls(r.status); p.textContent = r.status; pill.append(p);
+    const body = document.createElement('div');
+    body.innerHTML = '<span class="who"></span><span class="where"></span><div class="why"></div>';
+    body.querySelector('.who').textContent = 'SB ' + r.sb;
+    body.querySelector('.where').textContent = r.date;
+    for (const text of why(r.detail)) { const d = document.createElement('div'); d.textContent = text; body.querySelector('.why').append(d); }
+    li.append(pill, body); return li;
+  }));
+  if (shown.length > 300) { const li = document.createElement('li'); li.className = 'more'; li.textContent = `Showing 300 of ${shown.length}. Open the full log for the rest.`; $('list').append(li); }
+  $('empty').hidden = shown.length > 0;
+  $('empty').textContent = S.tab === 'attention' ? (S.rows.length ? 'Nothing needs attention.' : 'No rows to show.') : 'No rows here.';
+}
+
+/* ---------- live run ---------- */
+function reset() {
+  Object.assign(S, { seen: 0, rows: [], total: 0, done: 0, feed: [], only: '', started: Date.now(), tab: 'attention', finish: '' });
+  $('log').textContent = ''; $('feed').replaceChildren(); $('outcome').hidden = true;
+  $('liveNow').textContent = ''; $('fill').style.width = '0'; $('liveNum').textContent = '';
+}
+
+function consume(line) {
+  let m;
+  if ((m = ROW.exec(line))) {
+    S.rows.push({ sb: m[1], date: m[2], status: m[3], detail: m[4] });
+      } else if ((m = /^\[progress\] (\d+)\/(\d+) SB (\d{7}) (.+)$/.exec(line))) {
+    S.done = +m[1]; S.total = +m[2]; S.feed = [...S.feed.slice(-5), { sb: m[3], status: m[4] }];
+  } else if (/^\[(done|check)\]/.test(line)) S.finish = line;
+}
+
+const modeOf = c => c.includes('--excel') ? 'Write' : / -c( |$)/.test(c) ? 'Check' : / -n( |$)/.test(c) ? 'Preview' : 'Sync';
+
+function renderLive(state) {
+  const failed = !state.running && state.exitCode, mode = modeOf(state.command);
+  const counted = mode === 'Sync' || mode === 'Preview' || mode === 'Write';
+  $('live').hidden = $('results').hidden = $('logBox').hidden = state.id === 0;
+  $('liveLabel').textContent = mode;
+  $('stop').hidden = !state.running;
+  $('bar').hidden = !(state.running && S.total && counted);
+  $('fill').style.width = (S.total ? S.done / S.total * 100 : 0) + '%';
+  $('liveNum').textContent = failed ? 'Stopped' : counted && S.total ? `${num(S.done)} / ${num(S.total)}` : state.running ? '...' : mode === 'Check' ? 'Checked' : S.rows.length ? 'Done' : 'Nothing to do';
+  $('liveNow').textContent = state.running ? `${Math.round((Date.now() - S.started) / 1000)}s elapsed · report.xlsx is written when the run ends` : '';
+  $('feed').replaceChildren(...(state.running ? S.feed.slice().reverse().map(f => { const p = document.createElement('span'); p.className = 'pill ' + cls(f.status); p.textContent = `${f.sb} ${f.status}`; return p; }) : []));
+  const hasEnd = !state.running && (S.finish || failed);
+  $('outcome').hidden = !hasEnd;
+  if (hasEnd) {
+    const errorLine = failed && $('log').textContent.split('\n').reverse().find(l => /^ERROR/.test(l));
+    $('outcome').textContent = errorLine ? errorLine.replace(/^ERROR:\s*/, '') : S.finish.replace(/^\[\w+\]\s*/, '').split(' · ').slice(-1)[0];
+  }
+}
+
+function render(state) {
+  if (state.id !== S.runId) { S.runId = state.id; reset(); }
+  const wasRunning = S.running;
+  S.running = state.running;
+  for (const line of state.lines) { consume(line); $('log').textContent += line + '\n'; }
+  S.seen += state.lines.length;
+  if (state.lines.length) { const log = $('log'); log.scrollTop = log.scrollHeight; }
+  const failed = !state.running && state.exitCode;
+  $('state').hidden = !state.running && !failed;
+  $('state').textContent = state.running ? 'Running' : 'Failed';
+  $('state').className = 'pill ' + (state.running ? 'busy' : 'fail');
+  renderLive(state);
+  if (S.runId !== 0) renderResults();
+  if (!state.running && failed) $('logBox').open = true;
+  if (wasRunning && !state.running) loadDb();
+  renderCta();
+  if (wasRunning && !state.running) loadOverview();
+}
+
+async function poll() {
+  if (S.polling) return;
+  S.polling = true;
+  try { render(await (await fetch('/api/log?from=' + (S.runId === -1 ? 0 : S.seen))).json()); }
+  catch { $('state').hidden = false; $('state').textContent = 'Server offline'; $('state').className = 'pill fail'; }
+  S.polling = false;
+}
+
+async function post(path, body) {
+  const res = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}) });
+  return res.ok ? null : (await res.json()).error;
+}
+
+async function start(mode) {
+  const error = await post('/api/run', { mode });
+  $('error').hidden = !error; $('error').textContent = error ?? '';
+  if (!error) { S.runId = -1; await poll(); window.scrollTo({ top: $('live').offsetTop - 16, behavior: 'smooth' }); }
+}
+
+$('sync').onclick = () => start('sync');
+$('preview').onclick = () => start('dry');
+$('check').onclick = () => start('check');
+$('write').onclick = () => start('write');
+$('theme').onclick = () => {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  try { localStorage.theme = next; } catch {}
+};
+$('stop').onclick = () => post('/api/stop');
+
+/* ---------- database view and column picker ---------- */
+async function loadDb() {
+  let d; try { d = await (await fetch('/api/db')).json(); } catch { return; }
+  $('dbCount').textContent = d.total ? `· ${num(d.total)} bills${d.total > d.bills.length ? ` (newest ${num(d.bills.length)} listed)` : ''}` : '· empty';
+  $('iecNote').hidden = !d.missing_iecs.length;
+  $('iecNote').textContent = d.missing_iecs.length ? 'Exporter name needed: ' + d.missing_iecs.map(m => `${m.iec} (${m.bills})`).join(', ') + '. Approve with: bun run sync iec-set IEC "NAME"' : '';
+  $('dbList').replaceChildren(...d.bills.map(b => {
+    const li = document.createElement('li'); li.className = 'item';
+    const pill = document.createElement('span'); pill.className = 'pill ' + (b.gaps.length ? 'Partial' : 'Success'); pill.textContent = b.gaps.length ? 'Gaps' : 'Complete';
+    const body = document.createElement('div'); body.innerHTML = '<span class="who"></span><span class="where"></span><div class="why"></div>';
+    body.querySelector('.who').textContent = 'SB ' + b.sb_no;
+    body.querySelector('.where').textContent = `${b.sb_date} · ${b.port_code}${b.exporter ? ' · ' + b.exporter : ''}`;
+    body.querySelector('.why').textContent = b.gaps.length ? 'Empty: ' + b.gaps.map(g => FIELD[g] ?? g).join(', ') : 'LEO ' + b.leo_date;
+    li.append(pill, body); return li;
+  }));
+}
+
+const M = { catalog: [], rows: [] };
+function renderMap() {
+  $('mapRows').replaceChildren(...M.rows.map((r, i) => {
+    const div = document.createElement('div'); div.className = 'fields'; div.style.marginBottom = '10px';
+    const col = document.createElement('input'); col.type = 'text'; col.value = r.header; col.placeholder = 'Excel column header'; col.oninput = () => { r.header = col.value; };
+    const sel = document.createElement('select');
+    for (const f of M.catalog) { const o = document.createElement('option'); o.value = f.id; o.textContent = f.label + ' (' + f.id + ')'; sel.append(o); }
+    sel.value = r.field; sel.onchange = () => { r.field = sel.value; };
+    const del = document.createElement('button'); del.className = 'link'; del.textContent = 'Remove'; del.onclick = () => { M.rows.splice(i, 1); renderMap(); };
+    div.append(col, sel, del); return div;
+  }));
+}
+async function loadMap() {
+  try { const d = await (await fetch('/api/fields')).json(); M.catalog = d.catalog; M.rows = Object.entries(d.map).map(([header, field]) => ({ header, field })); renderMap(); } catch {}
+}
+$('addMap').onclick = () => { M.rows.push({ header: '', field: M.catalog[0]?.id }); renderMap(); };
+$('saveMap').onclick = async () => {
+  const map = {}; for (const r of M.rows) if (r.header.trim()) map[r.header.trim()] = r.field;
+  const error = await post('/api/map', map);
+  $('mapMsg').textContent = error ?? 'Saved. The next run uses these columns.';
+};
+loadOverview(); loadDb(); loadMap(); poll(); setInterval(poll, 700);
+</script>
+</body>
+</html>
