@@ -103,7 +103,7 @@ export function value_token(field:string,input:string): string|null {
 
 /** Gmail evidence. A checklist the owner attaches carries its job token in the file name, e.g. `CheckList-EXP-2627-70.pdf`; `VIDE-EXP-…` is the owner's too. */
 export const JOB_TOKEN = /(?:VIDE-)?EXP-\d{4}-\d+/gi;
-export const OWN_ADDRESS = /vishallogistics|quantavil@gmail\.com/i, PORTAL_ADDRESS = /icegate/i, NOT_AGENT_ADDRESS = /^bhopalmehta83@gmail\.com$/i; // NOT_AGENT_ADDRESS: not an exporter or agent, never an agent email
+export const OWN_ADDRESS = /vishallogistics|quantavil@gmail\.com/i, PORTAL_ADDRESS = /icegate/i, NOT_AGENT_ADDRESS = /^(?:bhopalmehta83|deependrasingh215)@gmail\.com$/i; // NOT_AGENT_ADDRESS: not an exporter or agent, never an agent email
 const job_number = (token: string) => token.replace(/^VIDE-/, '');
 /** Distinct job tokens in attachment file names (`EXP-2627-70` and `VIDE-EXP-2627-70` are one job), upper case, in order of appearance. */
 export const job_tokens = (filenames: string[]): string[] => { const seen = new Map<string, string>(); for (const t of filenames.flatMap(f => f.match(JOB_TOKEN) ?? [])) if (!seen.has(job_number(t.toUpperCase()))) seen.set(job_number(t.toUpperCase()), t.toUpperCase()); return [...seen.values()]; };

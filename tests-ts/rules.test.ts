@@ -12,6 +12,7 @@ describe('Gmail evidence rules', () => {
     expect(agent_address(['x@a.com', 'y@a.com'])).toBe('x@a.com, y@a.com');
     expect(agent_address(['rohit@a.com', 'edi@a.com', 'Rohit@a.com', 'info@vishallogistics.in'])).toBe('rohit@a.com');
     expect(agent_address(['bhopalmehta83@gmail.com'], ['sales@d.com'])).toBe('sales@d.com');
+    expect(agent_address(['deependrasingh215@gmail.com', 'a@b.com'])).toBe('a@b.com');
     expect(agent_address([])).toBe('');
     expect(agent_address(['me@vishallogistics.in'], ['Agent@a.com', 'agent@a.com', 'b@a.com'])).toBe('agent@a.com'); // To has no outside address: Cc is used
     expect(agent_address(['x@a.com'], ['y@a.com'])).toBe('x@a.com');
