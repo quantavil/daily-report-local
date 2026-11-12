@@ -18,3 +18,7 @@ FIELD-SOURCES.md
 .vscode/
 .idea/
 node_modules/
+
+# SQLite journal files while the database is open
+data/*.db-wal
+data/*.db-shm

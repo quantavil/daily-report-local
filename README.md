@@ -118,7 +118,7 @@ Known limits:
 
 ## Trimming git history
 
-`bun run purge-history` shows how many commits are older than 30 days; `--apply` squashes them into one baseline commit and force-pushes (`--days N` changes the cutoff). No backup is kept. The user timer `purge-history.timer` (`~/.config/systemd/user/`) runs it weekly with `--apply`; it skips a run if the working tree is not clean.
+`bun run purge-history` shows how many commits are older than 30 days; `--apply` squashes them into one baseline commit and force-pushes (`--days N` changes the cutoff). No backup is kept. The user timer `purge-history.timer` (`~/.config/systemd/user/`) runs it weekly with `--apply`; it stops without changing anything if the working tree is not clean or the branch differs from origin. Before pushing it checks that the squashed tree equals the old tree, and a failed check or push restores the old history.
 
 ## Safety
 
