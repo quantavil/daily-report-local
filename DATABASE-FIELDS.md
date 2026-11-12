@@ -87,7 +87,7 @@ A bill is `Success` when `iec`, `exporter`, an invoice, `leo_date`, a container,
 | Field | Data source(s) | Example 1 | Example 2 |
 | --- | --- | --- | --- |
 | fy, sb_no | the bill the row belongs to | 2026-27, 9142977 | 2026-27, 9142978 |
-| field | `bill_no`, `own_job`, `agent_email` (the Remark columns; Gmail fills `own_job` and `agent_email` for FY 2026-27 bills where nothing is typed), or `status`, `stuffing`, `type_shipment` (a derived column typed over) | bill_no | stuffing |
+| field | `bill_no`, `own_job`, `agent_email` (the Remark columns; Gmail fills `own_job` and `agent_email` where nothing is typed), or `status`, `stuffing`, `type_shipment` (a derived column typed over) | bill_no | stuffing |
 | value | typed in `report.xlsx`, read back before each rewrite; a derived field's value replaces the computed one | SHIRDI | ICD stuffing |
 
 `notes_written` has the same shape and holds every typed-in column (blank cells too) as the workbook last showed it, so a stale workbook is told apart from a typed change.

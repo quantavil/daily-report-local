@@ -10,7 +10,7 @@ import { gatepass_identity, parse_gatepass, parse_sbcopy } from './gatepass/pars
 import { GmailError, type BillMail } from './gmail';
 import { month_end, NotReady, type EcopyRecord, type IcegateClient } from './icegate/client';
 import { BILL_FIELDS, is_typed, typed_field, type BillField } from './icegate/schemas';
-import { agent_address, bill_identity, DERIVED_LCL, excel_date, fy_of, job_tokens, MAIL_FROM, own_job_of, parse_date, plausible_sb_date, sb_number, stuffing_of } from './rules';
+import { agent_address, bill_identity, DERIVED_LCL, excel_date, fy_of, job_tokens, own_job_of, parse_date, plausible_sb_date, sb_number, stuffing_of } from './rules';
 import { apply_iec_names, clean, DataError, fill_bill, fill_containers, fill_invoices, fill_notes_from_mail, gaps, mail_checked, get_bill, list_bills, note_key, notes_of, set_notes, snapshot_notes, list_containers, lcl_key, list_invoices, set_iec_name, shared_containers, stamp, status_of, written_notes, type Bill, type BillKey, type BillRef, type Db } from './store/db';
 
 export type RowStatus = 'Success' | 'Partial' | 'Cancelled' | 'Manual' | 'Not found' | 'Error';
@@ -206,13 +206,13 @@ export async function sync(db: Db, client: IcegateClient, o: SyncOptions): Promi
     results.push([k, outcome]);
     o.on_progress?.(results.length, todo.length, k, outcome);
   });
-  if (!o.excel_only && o.mail) warnings.push(...await read_mail(db, o.mail, o.workers));
+  if (!o.excel_only && o.mail) warnings.push(...await read_mail(db, o.mail, o.workers, o.from));
   return { results: results.sort((a, b) => a[0].sb_date.localeCompare(b[0].sb_date) || a[0].sb_no.localeCompare(b[0].sb_no)), warnings };
 }
 
-/** From FY 2026-27, once per bill with a LEO date that is not cancelled: own job and agent address from Gmail, written only where the owner has typed nothing. A Gmail failure stops this step with one warning; the bills stay unread for the next run. */
-async function read_mail(db: Db, mail: (bill: BillKey) => Promise<BillMail>, workers: number): Promise<string[]> {
-  const done = mail_checked(db), todo = list_bills(db).filter(b => b.sb_date >= MAIL_FROM && b.leo_date && status_of(db, b) !== 'Cancelled' && !done.has(`${fy_of(b.sb_date)}|${b.sb_no}`)), warnings: string[] = [];
+/** Once per bill dated from the run's `--from` with a LEO date that is not cancelled: own job and agent address from Gmail, written only where the owner has typed nothing. A Gmail failure stops this step with one warning; the bills stay unread for the next run. */
+async function read_mail(db: Db, mail: (bill: BillKey) => Promise<BillMail>, workers: number, from: string): Promise<string[]> {
+  const done = mail_checked(db), todo = list_bills(db).filter(b => b.sb_date >= from && b.leo_date && status_of(db, b) !== 'Cancelled' && !done.has(`${fy_of(b.sb_date)}|${b.sb_no}`)), warnings: string[] = [];
   let stopped = false;
   await pool(todo, Math.min(workers, 4), async b => {
     if (stopped) return;

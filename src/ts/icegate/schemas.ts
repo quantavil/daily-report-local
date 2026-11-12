@@ -62,7 +62,7 @@ const DERIVED_FIELDS: { id: string; label: string; kind: FieldKind }[] = [
 /** Typed by hand in the workbook and kept in the database (table `notes`): `excel/read.ts` reads them back before each rewrite. The field is the part of the id after `notes.`. */
 const NOTE_FIELDS: { id: string; label: string; kind: FieldKind }[] = [
   { id: 'notes.agent_email', label: 'Remark: agent email (read from Gmail, a value typed in Excel is kept instead)', kind: 'text' }, { id: 'notes.bill_no', label: 'Remark: bill no. (typed in Excel, kept in the database)', kind: 'text' },
-  { id: 'notes.own_job', label: 'Own job Y/N (read from Gmail from FY 2026-27, a value typed in Excel is kept instead; dropdown Y/N, Y colours the SB Job No)', kind: 'text' },
+  { id: 'notes.own_job', label: 'Own job Y/N (read from Gmail, a value typed in Excel is kept instead; dropdown Y/N, Y colours the SB Job No)', kind: 'text' },
 ];
 /** Columns the owner can type into: remarks and the derived columns. Their note field is the part of the id after the dot. */
 export const is_typed = (id: string) => id.startsWith('notes.') || id.startsWith('derived.');

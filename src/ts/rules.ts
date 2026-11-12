@@ -101,8 +101,7 @@ export function value_token(field:string,input:string): string|null {
  return field==='container_size' ? (text.startsWith('4410') ? '40' : text.replace(/\.$/,'').match(/^(?:20|40|45)/)?.[0] ?? text) : field==='customs_seal' ? text.replace(/\./g,'') : text; // some gatepasses print the size or seal with a trailing dot ("40.", "BOLT51634360.", "BOL.T51738219"; some print '4410' for a 40 ft box)
 }
 
-/** Gmail evidence (FY 2026-27 on). A checklist the owner attaches carries its job token in the file name, e.g. `CheckList-EXP-2627-70.pdf`; `VIDE-EXP-…` is the owner's too. */
-export const MAIL_FROM = '2026-04-01';
+/** Gmail evidence. A checklist the owner attaches carries its job token in the file name, e.g. `CheckList-EXP-2627-70.pdf`; `VIDE-EXP-…` is the owner's too. */
 export const JOB_TOKEN = /(?:VIDE-)?EXP-\d{4}-\d+/gi;
 export const OWN_ADDRESS = /vishallogistics|quantavil@gmail\.com/i, PORTAL_ADDRESS = /icegate/i;
 const job_number = (token: string) => token.replace(/^VIDE-/, '');
@@ -114,7 +113,6 @@ export function own_job_of(tokens: string[], has_mail: boolean, has_leo: boolean
   if (tokens.length > 1) return `CHECK: ${tokens.join(', ')}`;
   return has_mail && has_leo ? 'N' : '';
 }
-/** The agent's address: the one outside address the owner wrote to; blank when there are none or several. */
 /** The outside address that appears most often in To; a tie keeps every tied address for the owner to trim. When To holds no outside address (a reply sent to the owner's own mailbox), Cc is used the same way. */
 export function agent_address(to: string[], cc: string[] = []): string {
   for (const list of [to, cc]) {

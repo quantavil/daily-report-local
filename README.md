@@ -55,7 +55,7 @@ The Gmail fallback uses the existing `gws` CLI and a Gmail-authorized account. I
 
 ## Own job and agent email from Gmail
 
-For bills with an SB date from 2026-04-01, a LEO date and no cancellation, each sync reads Gmail once per bill (read-only, nothing downloaded): the threads that mention the SB number, their attachment file names, and the To addresses of the owner's own mail that carries an attachment.
+For bills dated from the run's `--from` with a LEO date and no cancellation, each sync reads Gmail once per bill (read-only, nothing downloaded): the threads that mention the SB number, their attachment file names, and the To addresses of the owner's own mail that carries an attachment.
 
 - One job token (`EXP-yyyy-n`, or `VIDE-EXP-yyyy-n`) in a file name, e.g. `CheckList-EXP-2627-70.pdf`: `Y`.
 - Several different tokens: the own-job cell reads `CHECK: EXP-2627-70, EXP-2627-71` so you can settle it by typing `Y` or `N`.
@@ -77,9 +77,9 @@ rebuilt from the database each run, so never edit it by hand.
 | Job Date | Job Status report, then the enquiry |
 | Type of Stuffing (derived) | From the container seals, never stored: every seal carries a letter (RFID bolt seals such as BOLT, KLIK, ENOS) is `Factory stuffing`. Numeric, mixed or missing seals stay blank (a numeric seal is mostly ICD but can be Factory), unless set with `stuffing-set`. |
 | Facilitation Category | Gatepass `14.Facilitation Category` (e.g. GREEN CHANNEL). |
-| Remark(Agent email) | From FY 2026-27, the one outside address the owner wrote to on mail carrying an attachment for the bill (see "Own job and agent email from Gmail"). Blank when there are none; tied addresses are all written. |
+| Remark(Agent email) | The one outside address the owner wrote to on mail carrying an attachment for the bill (see "Own job and agent email from Gmail"). Blank when there are none; tied addresses are all written. |
 | Remark(Bill no.) | Typed by hand in Excel. Each sync reads them back into the database (table `notes`) before rewriting the file, so they last (see below). |
-| Remark(Own job Y/N) | Filled from Gmail for FY 2026-27 bills (below), otherwise typed by hand in Excel; either way kept like the other remarks: `Y` when the owner's own firm made the job, `N` when a third party did. The dropdown allows only Y or N, and a `Y` colours that row's `SB Job No` cell green through an Excel rule that follows what you type. |
+| Remark(Own job Y/N) | Filled from Gmail (below), otherwise typed by hand in Excel; either way kept like the other remarks: `Y` when the owner's own firm made the job, `N` when a third party did. The dropdown allows only Y or N, and a `Y` colours that row's `SB Job No` cell green through an Excel rule that follows what you type. |
 | Exporter | IEC name (My IEC or `iec-set`), else the name other gatepasses gave that IEC (if they agree), else the gatepass `3.Exporter`, else the SB e-copy exporter (read only when IEC or exporter is still blank; filed bills have one before LEO). My IEC covers importers, not export clients, so it fills few names. |
 | IEC | Job Status report, else the gatepass `IEC/Br` |
 | Inv No | public SB enquiry (the invoice date stays in the database, not in the report) |
