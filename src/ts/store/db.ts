@@ -1,4 +1,4 @@
-/** SQLite store: one row per bill plus invoices, containers and the IEC-name map. No ICEGATE or Excel code. */
+/** SQLite store: one row per bill plus invoices, containers, the IEC-name map and the hand-typed notes. No ICEGATE or Excel code. */
 import { Database } from 'bun:sqlite';
 import { chmodSync, copyFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -7,6 +7,8 @@ import { BLANK_VALUES, fy_of, is_cancelled, LCL_WINDOW_DAYS, parse_date, same_bo
 
 export interface BillKey { sb_no: string; sb_date: string; port_code: string }
 export type Bill = BillKey & Record<string, string>;
+/** What identifies a bill in the database: financial year (from the date) and SB number. */
+export type BillRef = Pick<BillKey, 'sb_no' | 'sb_date'>;
 export type Db = Database;
 
 /** Portal data that cannot be stored (invalid date, conflicting identity): reported on the bill or run, never guessed. */
@@ -56,7 +58,13 @@ export function open_db(path: string, readonly = false): Db {
     if (path !== ':memory:') chmodSync(path, 0o600);
   }
   db.run('CREATE TABLE IF NOT EXISTS manual (fy TEXT NOT NULL, sb_no TEXT NOT NULL, PRIMARY KEY (fy, sb_no))'); // outside the rebuild, like iec_names
-  db.run("CREATE TABLE IF NOT EXISTS stuffing_overrides (fy TEXT NOT NULL, sb_no TEXT NOT NULL, value TEXT NOT NULL CHECK (value IN ('Factory stuffing', 'ICD stuffing')), PRIMARY KEY (fy, sb_no))"); // the owner's decision beats the seal rule
+  db.run('CREATE TABLE IF NOT EXISTS notes (fy TEXT NOT NULL, sb_no TEXT NOT NULL, field TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (fy, sb_no, field))'); // typed by hand in the workbook (remarks, and derived columns the owner overwrote): never rebuilt
+  db.run('CREATE TABLE IF NOT EXISTS mail_checked (fy TEXT NOT NULL, sb_no TEXT NOT NULL, PRIMARY KEY (fy, sb_no))'); // bills whose Gmail evidence was read once; clearing a cell afterwards is final
+  db.run('CREATE TABLE IF NOT EXISTS notes_written (fy TEXT NOT NULL, sb_no TEXT NOT NULL, field TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (fy, sb_no, field))'); // every typed-in column as the workbook last showed it
+  if (db.query("SELECT 1 FROM sqlite_master WHERE name = 'stuffing_overrides'").get()) db.transaction(() => { // the earlier separate table of stuffing decisions is now the `stuffing` note
+    db.run("INSERT OR IGNORE INTO notes SELECT fy, sb_no, 'stuffing', value FROM stuffing_overrides");
+    db.run('DROP TABLE stuffing_overrides');
+  })();
   return db;
 }
 
@@ -69,7 +77,7 @@ export function clean(value: unknown, kind: string = 'text'): string {
 }
 
 /** A bill is unique per financial year and SB number. */
-const key_params = (k: BillKey) => [fy_of(k.sb_date), k.sb_no];
+const key_params = (k: BillRef) => [fy_of(k.sb_date), k.sb_no];
 const where = 'fy = ? AND sb_no = ?';
 
 /** A stored bill with this key but another date or port, as an error message; null when the key is free or identical. */
@@ -135,12 +143,39 @@ export function set_iec_name(db: Db, iec: string, name: string, source: 'my-iec'
     WHERE excluded.source = 'user' OR iec_names.source <> 'user'`).run(iec, name, source);
 }
 
-/** Records the owner's Type of Stuffing for a bill whose seals mislead the derived rule. */
-export function set_stuffing(db: Db, k: BillKey, value: string): void {
-  if (!get_bill(db, k)) throw new Error(`No bill ${k.sb_no} on ${k.sb_date}`);
-  db.query('INSERT OR REPLACE INTO stuffing_overrides VALUES (?, ?, ?)').run(...key_params(k), value);
+/** Stores hand-typed workbook values for one bill, field by field; an empty value deletes the note (a derived column then shows its computed value again). Returns how many notes changed. */
+export function set_notes(db: Db, k: BillRef, notes: Record<string, string>): number {
+  if (!get_bill(db, k)) return 0;
+  let changed = 0;
+  db.transaction(() => {
+    for (const [field, value] of Object.entries(notes)) {
+      const text = value.trim();
+      changed += text
+        ? db.query('INSERT INTO notes VALUES (?, ?, ?, ?) ON CONFLICT DO UPDATE SET value = excluded.value WHERE value <> excluded.value').run(...key_params(k), field, text).changes
+        : db.query('DELETE FROM notes WHERE fy = ? AND sb_no = ? AND field = ?').run(...key_params(k), field).changes;
+    }
+  })();
+  return changed;
 }
-export const stuffing_override = (db: Db, k: BillKey): string => (db.query('SELECT value FROM stuffing_overrides WHERE fy = ? AND sb_no = ?').get(...key_params(k)) as { value: string } | null)?.value ?? '';
+/** Stores Gmail evidence for a bill once: a note already there (typed, or read earlier) is kept, and the bill is not read again. */
+export function fill_notes_from_mail(db: Db, k: BillRef, notes: Record<string, string>): void {
+  db.transaction(() => {
+    for (const [field, value] of Object.entries(notes)) if (value.trim()) db.query('INSERT OR IGNORE INTO notes VALUES (?, ?, ?, ?)').run(...key_params(k), field, value.trim());
+    db.query('INSERT OR IGNORE INTO mail_checked VALUES (?, ?)').run(...key_params(k));
+  })();
+}
+export const mail_checked = (db: Db): Set<string> => new Set((db.query('SELECT fy, sb_no FROM mail_checked').all() as { fy: string; sb_no: string }[]).map(r => `${r.fy}|${r.sb_no}`));
+/** Remembers what the workbook shows in each typed-in column (blank cells too), so a later read-back tells a cell the user changed from a workbook that is merely out of date. */
+export function snapshot_notes(db: Db, shown: Iterable<[BillRef, string, string]>): void {
+  db.transaction(() => {
+    db.run('DELETE FROM notes_written');
+    const insert = db.query('INSERT OR REPLACE INTO notes_written VALUES (?, ?, ?, ?)');
+    for (const [k, field, value] of shown) insert.run(...key_params(k), field, value);
+  })();
+}
+export const note_key = (k: BillRef, field: string) => `${key_params(k).join('|')}|${field}`;
+export const written_notes = (db: Db): Map<string, string> => new Map((db.query('SELECT fy, sb_no, field, value FROM notes_written').all() as { fy: string; sb_no: string; field: string; value: string }[]).map(n => [`${n.fy}|${n.sb_no}|${n.field}`, n.value]));
+export const notes_of = (db: Db, k: BillRef): Record<string, string> => Object.fromEntries((db.query('SELECT field, value FROM notes WHERE fy = ? AND sb_no = ?').all(...key_params(k)) as { field: string; value: string }[]).map(n => [n.field, n.value]));
 
 /** Closes a bill by hand: it keeps its gaps but is never queried again unless the run is forced. */
 export function mark_manual(db: Db, k: BillKey): void {
@@ -148,7 +183,7 @@ export function mark_manual(db: Db, k: BillKey): void {
   db.query('INSERT OR IGNORE INTO manual VALUES (?, ?)').run(...key_params(k));
 }
 
-export function get_bill(db: Db, k: BillKey): Bill | null { return db.query(`SELECT * FROM bills WHERE ${where}`).get(...key_params(k)) as Bill | null; }
+export function get_bill(db: Db, k: BillRef): Bill | null { return db.query(`SELECT * FROM bills WHERE ${where}`).get(...key_params(k)) as Bill | null; }
 export function list_bills(db: Db): Bill[] { return db.query('SELECT * FROM bills ORDER BY sb_date DESC, sb_no DESC').all() as Bill[]; }
 export const list_invoices = (db: Db, k: BillKey) => db.query(`SELECT * FROM invoices WHERE ${where} ORDER BY position`).all(...key_params(k)) as Record<string, string>[];
 export const list_containers = (db: Db, k: BillKey) => db.query(`SELECT * FROM containers WHERE ${where} ORDER BY position`).all(...key_params(k)) as Record<string, string>[];

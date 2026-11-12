@@ -3,6 +3,7 @@ import { strFromU8, unzipSync } from 'fflate';
 import { mkdtemp, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { read_sheets } from '../../src/ts/excel/read';
 import { build_report, write_report, type Sheet } from '../../src/ts/excel/report';
 
 const sheets: Sheet[] = [{ name: 'FY 2026-27', headers: ['Shipping Bill Date', 'Exporter', 'Container No.'], derived: ['Container No.'], rows: [{ 'Shipping Bill Date': { value: '2026-10-07', date: true }, 'Exporter': { value: 'A & B <LTD>' }, 'Container No.': { value: 'X1\nX2' } }, {}] }];
@@ -29,9 +30,34 @@ test('the highlight flag colours the target column live and limits the flag colu
   expect(strFromU8(unzipSync(build_report(sheets))['xl/worksheets/sheet1.xml']!)).not.toContain('conditionalFormatting');
 });
 
-test('the report is replaced atomically and leaves no temporary file', async () => {
+test('the report is replaced atomically, leaves no temporary file and keeps the previous file as .bak', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'daily-report-')), path = join(dir, 'report.xlsx');
-  await write_report(path, sheets); await write_report(path, sheets);
-  expect(await readdir(dir)).toEqual(['report.xlsx']);
+  await write_report(path, sheets);
+  expect(await readdir(dir)).toEqual(['report.xlsx']); // nothing to back up yet
+  const first = await readFile(path);
+  await write_report(path, [{ ...sheets[0]!, name: 'FY 2025-26' }]);
+  expect((await readdir(dir)).sort()).toEqual(['report.xlsx', 'report.xlsx.bak']);
+  expect(await readFile(`${path}.bak`)).toEqual(first);
   expect(Object.keys(unzipSync(new Uint8Array(await readFile(path))))).toContain('xl/workbook.xml');
+});
+
+test('read_sheets returns what write_report wrote: headers and text, blank cells as empty strings, empty rows left out', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'daily-report-')), path = join(dir, 'report.xlsx');
+  await write_report(path, sheets);
+  expect(await read_sheets(path)).toEqual([{ name: 'FY 2026-27', headers: ['Shipping Bill Date', 'Exporter', 'Container No.'], rows: [{ 'Shipping Bill Date': '46302', Exporter: 'A & B <LTD>', 'Container No.': 'X1\nX2' }] }]);
+});
+
+test('read_sheets understands the shared strings an Excel save produces; a missing file is null, a broken one throws', async () => {
+  const { strToU8, zipSync } = await import('fflate'), { writeFile } = await import('node:fs/promises');
+  const dir = await mkdtemp(join(tmpdir(), 'daily-report-')), path = join(dir, 'saved.xlsx');
+  await writeFile(path, zipSync({
+    'xl/workbook.xml': strToU8('<workbook xmlns:r="x"><sheets><sheet name="FY 2026-27" sheetId="1" r:id="rId1"/></sheets></workbook>'),
+    'xl/_rels/workbook.xml.rels': strToU8('<Relationships><Relationship Id="rId1" Type="t" Target="/xl/worksheets/sheet1.xml"/></Relationships>'),
+    'xl/sharedStrings.xml': strToU8('<sst><si><t>Remark</t></si><si><r><t>agent </t></r><r><t>&amp; co</t></r></si></sst>'),
+    'xl/worksheets/sheet1.xml': strToU8('<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="C1" t="inlineStr"><is><t>Skipped column</t></is></c></row><row r="2"><c r="A2" t="s"><v>1</v></c><c r="B2"><v>7</v></c></row></sheetData></worksheet>'),
+  }));
+  expect(await read_sheets(path)).toEqual([{ name: 'FY 2026-27', headers: ['Remark', 'Skipped column'], rows: [{ Remark: 'agent & co', 'Skipped column': '' }] }]);
+  expect(await read_sheets(join(dir, 'none.xlsx'))).toBeNull();
+  await writeFile(join(dir, 'broken.xlsx'), 'not a zip');
+  await expect(read_sheets(join(dir, 'broken.xlsx'))).rejects.toThrow('left untouched');
 });

@@ -4,13 +4,12 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import pkg from '../../package.json';
 import { load_map } from './excel/export-map';
-import { write_report } from './excel/report';
 import { command_client } from './icegate/client';
-import { gmail_gatepasses } from './gmail';
+import { gmail_bill_mail, gmail_gatepasses } from './gmail';
 import { CATALOG } from './icegate/schemas';
 import { parse_date } from './rules';
-import { gaps, list_bills, mark_manual, missing_iecs, open_db, set_iec_name, set_stuffing, status_of, type BillKey, type Db } from './store/db';
-import { gatepass_counts, report_sheets, sync, type RowStatus } from './workflow';
+import { gaps, list_bills, mark_manual, missing_iecs, open_db, set_iec_name, set_notes, status_of, type BillKey, type Db } from './store/db';
+import { gatepass_counts, keep_notes, publish_report, report_sheets, sync, type RowStatus } from './workflow';
 
 export const ROOT = join(import.meta.dir, '../..');
 
@@ -120,7 +119,7 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
       if (!sb_no || !date || !['Factory stuffing', 'ICD stuffing'].includes(value ?? '') || rest.length !== 3) throw new Error('Usage: stuffing-set SBNO SB_DATE "Factory stuffing"|"ICD stuffing"');
       const db = open_db(dbPath), bill = list_bills(db).find(b => b.sb_no === sb_no && b.sb_date === parse_date(date));
       if (!bill) throw new Error(`No bill ${sb_no} dated ${date}`);
-      set_stuffing(db, bill, value!);
+      set_notes(db, bill, { stuffing: value! });
       console.log(`${tag('stuffing')} ${sb_no} = ${value}`);
       return 0;
     }
@@ -149,7 +148,7 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
       if (process.stderr.isTTY) process.stderr.write(`\r${tag('sync')} ${done}/${count}`);
       else if (!process.stdout.isTTY) console.log(`[progress] ${done}/${count} SB ${k.sb_no} ${outcome.status}`);
     };
-    const { results, warnings } = await sync(db, command_client(), { workers, excel_only: !!o.excel, force: !!o.force, from, to: o.to ? parse_date(o.to) : undefined, gatepass_dir: join(dataDir, 'gatepass'), gmail: gmail_gatepasses, on_progress });
+    const { results, warnings } = await sync(db, command_client(), { workers, excel_only: !!o.excel, force: !!o.force, from, to: o.to ? parse_date(o.to) : undefined, gatepass_dir: join(dataDir, 'gatepass'), gmail: gmail_gatepasses, mail: gmail_bill_mail, on_progress });
     if (!o.quiet && process.stderr.isTTY) process.stderr.write('\r\x1b[K');
     for (const w of warnings) console.log(`${tag('warn')} ${w}`);
     const counts: Partial<Record<RowStatus, number>> = {};
@@ -159,8 +158,10 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
     }
     const sources = gatepass_counts(results.map(([, outcome]) => outcome));
     if (Object.values(sources).some(Boolean)) console.log(`${tag('gatepass')} ICEGATE ${sources.icegate} · Gmail ${sources.gmail} · saved PDF (origin unknown) ${sources.saved} · unavailable ${sources.unavailable} · errors ${sources.error}`);
+    const kept = await keep_notes(db, map, path);
+    if (kept) say(`${tag('notes')} ${kept} typed value(s) read back from ${path}`);
     const sheets = report_sheets(db, map), total = sheets.reduce((n, s) => n + s.rows.length, 0);
-    if (!o['dry-run']) await write_report(path, sheets);
+    if (!o['dry-run']) await publish_report(db, path, sheets, map);
     const summary = (Object.keys(STATUS_COLOR) as RowStatus[]).filter(s => counts[s]).map(s => `${paint(STATUS_COLOR[s], s)} ${counts[s]}`).join(' · ');
     const seconds = ((performance.now() - started) / 1000).toFixed(1);
     console.log(`${tag('done')} ${summary || 'nothing to fetch'} · ${total} bills · ${seconds}s · ${o['dry-run'] ? 'dry run, report not written' : `${path} written`}`);

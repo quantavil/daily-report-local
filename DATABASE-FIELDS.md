@@ -82,6 +82,18 @@ A bill is `Success` when `iec`, `exporter`, an invoice, `leo_date`, a container,
 | name (the exporter) | My IEC list, `iec-set` | SAMPLE EXPORTS PVT LTD | DEMO TRADERS LLP |
 | source | `my-iec` or `user` | my-iec | user |
 
+## `notes` (typed in Excel)
+
+| Field | Data source(s) | Example 1 | Example 2 |
+| --- | --- | --- | --- |
+| fy, sb_no | the bill the row belongs to | 2026-27, 9142977 | 2026-27, 9142978 |
+| field | `bill_no`, `own_job`, `agent_email` (the Remark columns; Gmail fills `own_job` and `agent_email` for FY 2026-27 bills where nothing is typed), or `status`, `stuffing`, `type_shipment` (a derived column typed over) | bill_no | stuffing |
+| value | typed in `report.xlsx`, read back before each rewrite; a derived field's value replaces the computed one | SHIRDI | ICD stuffing |
+
+`notes_written` has the same shape and holds every typed-in column (blank cells too) as the workbook last showed it, so a stale workbook is told apart from a typed change.
+
+`mail_checked` (fy, sb_no) lists the bills whose Gmail evidence was read, so a cleared cell stays cleared.
+
 ## `manual` (bills closed by hand)
 
 | Field | Data source(s) | Example 1 | Example 2 |
@@ -95,7 +107,7 @@ Both are computed at export time.
 | Excel column | How it is computed | Example 1 | Example 2 |
 | --- | --- | --- | --- |
 | **Type Shipment (derived)** | `LCL` when a container is shared by bills of different non-empty exporters, else blank | (blank) | LCL |
-| **Type of Stuffing (derived)** | `Factory stuffing` when every seal has a letter, else blank; a `stuffing-set` override wins | (blank) | Factory stuffing |
+| **Type of Stuffing (derived)** | `Factory stuffing` when every seal has a letter, else blank; a typed value (`stuffing-set` stores one) wins | (blank) | Factory stuffing |
 | **Status** | `Success`, `Partial`, `Cancelled` or `Not found`, from what the database holds | Success | Partial |
 
 ## Candidate additions to the report

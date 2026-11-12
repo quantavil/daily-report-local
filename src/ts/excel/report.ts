@@ -1,17 +1,15 @@
 /** Writes `report.xlsx` from scratch: one sheet per financial year, inline strings, real dates. No ICEGATE or database code. */
 import { strToU8, zipSync } from 'fflate';
 import { randomBytes } from 'node:crypto';
-import { rename, unlink, writeFile } from 'node:fs/promises';
+import { copyFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { EXCEL_DATE_NUMBER_FORMAT, parse_date } from '../rules';
+import { EXCEL_DATE_NUMBER_FORMAT, excel_serial, parse_date } from '../rules';
 
 export interface Cell { value: string; date?: boolean }
-export interface Sheet { name: string; headers: string[]; rows: Record<string, Cell>[]; /** Headers of derived columns: people and agents may override them, so they get an amber header. */ derived?: string[]; /** Colours the `target` column's cells green in rows where the `flag` column says Y, and limits `flag` to Y or N. */ highlight?: { flag: string; target: string } }
+export interface Sheet { name: string; headers: string[]; rows: Record<string, Cell>[]; /** Headers of derived and hand-typed columns: people and agents may overwrite them, so they get an amber header. */ derived?: string[]; /** Colours the `target` column's cells green in rows where the `flag` column says Y, and limits `flag` to Y or N. */ highlight?: { flag: string; target: string } }
 
 const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '');
 const letters = (n: number): string => (n > 26 ? letters(Math.floor((n - 1) / 26)) : '') + String.fromCharCode(65 + (n - 1) % 26);
-/** Excel serial day of an ISO date. */
-const serial = (iso: string) => Date.parse(`${iso}T00:00:00Z`) / 86_400_000 + 25569;
 /** Styles 2..9: body cells by row parity (white / pale grey) and kind. Style 1 is the header. */
 const HEADER = 1, DERIVED_HEADER = 2 + 8, CENTER = 0, LEFT = 1, DATE = 2, WRAP = 3;
 const style = (row: number, kind: number) => 2 + (row % 2) * 4 + kind;
@@ -19,7 +17,7 @@ const style = (row: number, kind: number) => 2 + (row % 2) * 4 + kind;
 function cell(ref: string, row: number, c: Cell | undefined, left: boolean): string {
   const blank = `<c r="${ref}" s="${style(row, left ? LEFT : CENTER)}"/>`;
   if (!c || !c.value) return blank;
-  if (c.date) try { return `<c r="${ref}" s="${style(row, DATE)}"><v>${serial(parse_date(c.value))}</v></c>`; } catch { /* not a date: written as text */ }
+  if (c.date) try { return `<c r="${ref}" s="${style(row, DATE)}"><v>${excel_serial(parse_date(c.value))}</v></c>`; } catch { /* not a date: written as text */ }
   return `<c r="${ref}" s="${style(row, c.value.includes('\n') ? WRAP : left ? LEFT : CENTER)}" t="inlineStr"><is><t xml:space="preserve">${esc(c.value)}</t></is></c>`;
 }
 
@@ -66,8 +64,12 @@ export function build_report(sheets: Sheet[]): Uint8Array {
   return zipSync(files);
 }
 
-/** Atomic replace: the report is regenerated from the database, so nothing else needs a backup. */
+/** Atomic replace. The file being replaced is first copied to `<path>.bak` (git-ignored), the one backup kept. */
 export async function write_report(path: string, sheets: Sheet[]): Promise<void> {
   const temporary = join(dirname(path), `.report-${randomBytes(6).toString('hex')}.tmp.xlsx`);
-  try { await writeFile(temporary, build_report(sheets)); await rename(temporary, path); } finally { await unlink(temporary).catch(() => {}); }
+  try {
+    await writeFile(temporary, build_report(sheets));
+    await copyFile(path, `${path}.bak`).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    await rename(temporary, path);
+  } finally { await unlink(temporary).catch(() => {}); }
 }

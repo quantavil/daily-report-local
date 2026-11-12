@@ -1,5 +1,11 @@
 /** ICEGATE rules and data validation; no network, filesystem or workbook side effects. */
 export const EXCEL_DATE_NUMBER_FORMAT = 'dd\\-mmm\\-yyyy';
+/** Excel serial day of an ISO date, and back: a date cell read from a workbook is that number, or text when typed as text. */
+export const excel_serial = (iso: string): number => Date.parse(`${iso}T00:00:00Z`) / 86_400_000 + 25569;
+export function excel_date(cell: string): string {
+  const text = cell.trim();
+  return /^\d+(?:\.\d+)?$/.test(text) && +text > 1 && +text < 2_958_466 ? new Date((Math.floor(+text) - 25569) * 86_400_000).toISOString().slice(0, 10) : parse_date(text);
+}
 /** Portal placeholders that mean "no value". */
 export const BLANK_VALUES = ['', '-', 'N.A.', 'N/A', 'NA', 'NONE', 'NULL'];
 /** Portal statuses treated as cancelled in the report. */
@@ -71,10 +77,15 @@ export function plausible_sb_date(sb_date: string, job_date: string): boolean {
  const lead=(Date.parse(parse_date(job_date))-Date.parse(parse_date(sb_date)))/864e5;
  return lead>=0 && lead<=GATEPASS_SB_LEAD_DAYS;
 }
+/** An SB number from text; throws on anything that is not seven ASCII digits. */
+export function sb_number(input: string): string {
+ const no=String(input).trim();
+ if (!/^[0-9]{7}$/.test(no)) throw new Error('SB number must contain seven ASCII digits');
+ return no;
+}
 /** A bill's identity from portal text; throws on anything that is not seven SB digits, a date and a six-character port. */
 export function bill_identity(sb_no: string, sb_date: string, port_code: string): { sb_no: string; sb_date: string; port_code: string } {
- const no=String(sb_no).trim(), port=String(port_code).trim().toUpperCase();
- if (!/^[0-9]{7}$/.test(no)) throw new Error('SB number must contain seven ASCII digits');
+ const no=sb_number(sb_no), port=String(port_code).trim().toUpperCase();
  if (!/^[A-Z0-9]{6}$/.test(port)) throw new Error('Port code must contain six ASCII letters/digits');
  return {sb_no:no,sb_date:parse_date(String(sb_date)),port_code:port};
 }
@@ -88,4 +99,29 @@ export function value_token(field:string,input:string): string|null {
  const checks:Record<string,RegExp>={sb_no:/^[0-9]{7}$/,port_code:/^[A-Z0-9]{6}$/,container_no:/^[A-Z0-9]{4,15}$/,container_size:/^(?:20|40|45|4410)\.?(?:\s*(?:FT|HC|GP|HQ|G1))?$/i,customs_seal:/^[A-Za-z0-9][A-Za-z0-9/.-]*$/};
  if (checks[field]&&!checks[field].test(text)) throw new Error(`Invalid ${field}: ${JSON.stringify(text)}`);
  return field==='container_size' ? (text.startsWith('4410') ? '40' : text.replace(/\.$/,'').match(/^(?:20|40|45)/)?.[0] ?? text) : field==='customs_seal' ? text.replace(/\./g,'') : text; // some gatepasses print the size or seal with a trailing dot ("40.", "BOLT51634360.", "BOL.T51738219"; some print '4410' for a 40 ft box)
+}
+
+/** Gmail evidence (FY 2026-27 on). A checklist the owner attaches carries its job token in the file name, e.g. `CheckList-EXP-2627-70.pdf`; `VIDE-EXP-…` is the owner's too. */
+export const MAIL_FROM = '2026-04-01';
+export const JOB_TOKEN = /(?:VIDE-)?EXP-\d{4}-\d+/gi;
+export const OWN_ADDRESS = /vishallogistics|quantavil@gmail\.com/i, PORTAL_ADDRESS = /icegate/i;
+const job_number = (token: string) => token.replace(/^VIDE-/, '');
+/** Distinct job tokens in attachment file names (`EXP-2627-70` and `VIDE-EXP-2627-70` are one job), upper case, in order of appearance. */
+export const job_tokens = (filenames: string[]): string[] => { const seen = new Map<string, string>(); for (const t of filenames.flatMap(f => f.match(JOB_TOKEN) ?? [])) if (!seen.has(job_number(t.toUpperCase()))) seen.set(job_number(t.toUpperCase()), t.toUpperCase()); return [...seen.values()]; };
+/** One token: own job `Y`. Several: the owner decides, so the cell lists them. None: `N` once the bill has its LEO date and some mail mentions it. Otherwise blank. */
+export function own_job_of(tokens: string[], has_mail: boolean, has_leo: boolean): string {
+  if (tokens.length === 1) return 'Y';
+  if (tokens.length > 1) return `CHECK: ${tokens.join(', ')}`;
+  return has_mail && has_leo ? 'N' : '';
+}
+/** The agent's address: the one outside address the owner wrote to; blank when there are none or several. */
+/** The outside address that appears most often in To; a tie keeps every tied address for the owner to trim. When To holds no outside address (a reply sent to the owner's own mailbox), Cc is used the same way. */
+export function agent_address(to: string[], cc: string[] = []): string {
+  for (const list of [to, cc]) {
+    const count = new Map<string, number>();
+    for (const a of list.map(x => x.toLowerCase()).filter(x => !OWN_ADDRESS.test(x) && !PORTAL_ADDRESS.test(x))) count.set(a, (count.get(a) ?? 0) + 1);
+    const ranked = [...count].sort((x, y) => y[1] - x[1]);
+    if (ranked.length) return ranked.filter(r => r[1] === ranked[0]![1]).map(r => r[0]).join(', ');
+  }
+  return '';
 }

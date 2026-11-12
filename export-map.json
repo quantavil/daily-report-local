@@ -18,7 +18,7 @@
   "EGM Date": "containers.egm_date",
   "Current Status": "bills.curr_status",
   "Status": "derived.status",
-  "Remark(Agent code)": "derived.blank",
-  "Remark(Bill no.)": "derived.blank",
-  "Remark(Own job Y/N)": "derived.own_job"
+  "Remark(Agent email)": "notes.agent_email",
+  "Remark(Bill no.)": "notes.bill_no",
+  "Remark(Own job Y/N)": "notes.own_job"
 }

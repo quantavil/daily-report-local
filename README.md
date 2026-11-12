@@ -53,6 +53,17 @@ Each sync reports gatepass counts for ICEGATE, Gmail, saved PDFs, unavailable do
 
 The Gmail fallback uses the existing `gws` CLI and a Gmail-authorized account. It reads messages and attachments without modifying mail. If `gws` or authorization is unavailable, the bill remains partial with a note; `--check` and `--excel` make no Gmail calls.
 
+## Own job and agent email from Gmail
+
+For bills with an SB date from 2026-04-01, a LEO date and no cancellation, each sync reads Gmail once per bill (read-only, nothing downloaded): the threads that mention the SB number, their attachment file names, and the To addresses of the owner's own mail that carries an attachment.
+
+- One job token (`EXP-yyyy-n`, or `VIDE-EXP-yyyy-n`) in a file name, e.g. `CheckList-EXP-2627-70.pdf`: `Y`.
+- Several different tokens: the own-job cell reads `CHECK: EXP-2627-70, EXP-2627-71` so you can settle it by typing `Y` or `N`.
+- No token, but mail about the bill exists: `N`. No mail: blank.
+- Agent email: the outside address (not the owner's, not ICEGATE) that appears most often in To. If addresses tie, all of them are written, comma-separated, for you to delete the wrong one. If To holds no outside address (a reply addressed to the owner's own mailbox), Cc is used the same way; blank if there are none.
+
+Values go into the `notes` table like typed remarks, only where nothing is stored. Type over a cell and your value wins; clear it and it stays blank (the bill is not read again). If Gmail is unavailable the step stops with one warning and the bills are tried on the next run. `--check` and `--excel` make no Gmail calls.
+
 ## The report
 
 Columns are `export-map.json` (default below; edit in the dashboard or by hand). The file is
@@ -66,14 +77,15 @@ rebuilt from the database each run, so never edit it by hand.
 | Job Date | Job Status report, then the enquiry |
 | Type of Stuffing (derived) | From the container seals, never stored: every seal carries a letter (RFID bolt seals such as BOLT, KLIK, ENOS) is `Factory stuffing`. Numeric, mixed or missing seals stay blank (a numeric seal is mostly ICD but can be Factory), unless set with `stuffing-set`. |
 | Facilitation Category | Gatepass `14.Facilitation Category` (e.g. GREEN CHANNEL). |
-| Remark(Agent code), Remark(Bill no.) | Blank header-only columns, filled by hand in Excel; not stored in the database (see below). |
-| Remark(Own job Y/N) | Blank column filled by hand in Excel: `Y` when the owner's own firm made the job, `N` when a third party did. The dropdown allows only Y or N, and a `Y` colours that row's `SB Job No` cell green through an Excel rule that follows what you type. |
+| Remark(Agent email) | From FY 2026-27, the one outside address the owner wrote to on mail carrying an attachment for the bill (see "Own job and agent email from Gmail"). Blank when there are none; tied addresses are all written. |
+| Remark(Bill no.) | Typed by hand in Excel. Each sync reads them back into the database (table `notes`) before rewriting the file, so they last (see below). |
+| Remark(Own job Y/N) | Filled from Gmail for FY 2026-27 bills (below), otherwise typed by hand in Excel; either way kept like the other remarks: `Y` when the owner's own firm made the job, `N` when a third party did. The dropdown allows only Y or N, and a `Y` colours that row's `SB Job No` cell green through an Excel rule that follows what you type. |
 | Exporter | IEC name (My IEC or `iec-set`), else the name other gatepasses gave that IEC (if they agree), else the gatepass `3.Exporter`, else the SB e-copy exporter (read only when IEC or exporter is still blank; filed bills have one before LEO). My IEC covers importers, not export clients, so it fills few names. |
 | IEC | Job Status report, else the gatepass `IEC/Br` |
 | Inv No | public SB enquiry (the invoice date stays in the database, not in the report) |
 | Container No. / Size / Customs Seal Number | EGM list in the enquiry, then the gatepass |
 | EGM No / EGM Date | public SB enquiry, per container |
-| Type Shipment (derived) | `LCL` when a container is shared by bills of different exporters dated within 14 days, else blank. Derived columns have an amber header: users and agents may overwrite them |
+| Type Shipment (derived) | `LCL` when a container is shared by bills of different exporters dated within 14 days, else blank. Derived columns have an amber header: you may type over them and the value lasts |
 | Current Status | the portal's own status text |
 | Status | `Success`, `Partial`, `Cancelled`, `Manual` or `Not found` |
 
@@ -99,9 +111,10 @@ Known limits:
 
 `report.xlsx` is rebuilt from `data/report.db` on every sync, so anything the database does not hold is lost on the next sync.
 
-- **Derived columns are computed, never stored:** `Status`, `Type of Stuffing (derived)` and `Type Shipment (derived)`. Typing into them in Excel does not last; the next sync overwrites it.
-- **Kept in the database on purpose:** bills, invoices and containers; `iec_names` (set with `iec-set`); `stuffing_overrides` (set with `stuffing-set`, wins over the seal rule); `manual` (set with `mark-manual`).
-- **Not stored anywhere but the file:** `Remark(Agent code)`, `Remark(Bill no.)` and `Remark(Own job Y/N)`. The sync writes them blank, so values typed into `report.xlsx` are blanked by the next sync, and so is the green `SB Job No` highlight that follows `Remark(Own job Y/N)`. Copy the file before syncing if you need them.
+- **Derived columns are computed, but a value you type over lasts:** `Status`, `Type of Stuffing (derived)` and `Type Shipment (derived)` are recomputed on every sync unless you typed into the cell; your value then replaces the computed one, and clearing the cell brings the computed value back. A typed `Status` changes only the report, not which bills are fetched. `stuffing-set` stores a stuffing type from the command line.
+- **Kept in the database on purpose:** bills, invoices and containers; `iec_names` (set with `iec-set`); `notes` (typed remarks, typed-over derived values and the Gmail own-job and agent-email values; `stuffing-set` writes one); `mail_checked` (bills whose Gmail evidence was read); `manual` (set with `mark-manual`).
+- **Typed values last:** `Remark(Bill no.)`, `Remark(Own job Y/N)` and any derived column you type over are stored in the database (table `notes`). Before each rewrite the sync reads `report.xlsx` back and keeps every cell you changed since the last write; clearing a cell clears the note. Save and close the file before you sync, because the sync reads what is on disk. Bills are matched by Shipping Bill No and Date, so keep those two columns in `export-map.json`. A workbook that cannot be read stops the run and is not overwritten.
+- **Backup:** the file a sync replaces is first copied to `report.xlsx.bak` (git-ignored); the database also has git history.
 
 ## Trimming git history
 
@@ -110,7 +123,7 @@ Known limits:
 ## Safety
 
 - All ICEGATE calls are read-only. Credentials stay in the `icegate` client.
-- `report.xlsx` is written to a temporary file and renamed, so a failed run leaves the old one.
+- `report.xlsx` is written to a temporary file and renamed, so a failed run leaves the old one, and the replaced file is kept as `report.xlsx.bak`.
 - `data/` holds `report.db` (mode 0600, committed on purpose); its `gatepass/` folder of saved PDFs is git-ignored.
 
 ## Development

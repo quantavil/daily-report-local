@@ -54,12 +54,21 @@ export const LIST_FIELDS: { id: string; label: string; kind: FieldKind }[] = [
 const IDENTITY_FIELDS: { id: string; label: string; kind: FieldKind }[] = [
   { id: 'bills.sb_no', label: 'Shipping bill no', kind: 'text' }, { id: 'bills.sb_date', label: 'Shipping bill date', kind: 'date' }, { id: 'bills.port_code', label: 'Port code', kind: 'text' },
 ];
-/** Computed at export time from what the database holds, never stored. */
+/** Computed at export time from what the database holds. Typing over one in the workbook stores that value as a note (see `NOTE_FIELDS`), which then wins; clearing the cell brings the computed value back. */
 const DERIVED_FIELDS: { id: string; label: string; kind: FieldKind }[] = [
-  { id: 'derived.status', label: 'Status', kind: 'text' }, { id: 'derived.blank', label: 'Blank column (filled in Excel)', kind: 'text' }, { id: 'derived.stuffing', label: 'Type of stuffing (derived; from the seal)', kind: 'text' }, { id: 'derived.type_shipment', label: 'Type shipment (derived; LCL only)', kind: 'text' }, { id: 'derived.own_job', label: 'Own job Y/N (blank; filled in Excel, dropdown Y/N, Y colours the SB Job No)', kind: 'text' },
+  { id: 'derived.status', label: 'Status (computed; a value typed in Excel is kept instead)', kind: 'text' }, { id: 'derived.stuffing', label: 'Type of stuffing (computed from the seal; a value typed in Excel is kept instead)', kind: 'text' },
+  { id: 'derived.type_shipment', label: 'Type shipment (computed, LCL only; a value typed in Excel is kept instead)', kind: 'text' },
 ];
+/** Typed by hand in the workbook and kept in the database (table `notes`): `excel/read.ts` reads them back before each rewrite. The field is the part of the id after `notes.`. */
+const NOTE_FIELDS: { id: string; label: string; kind: FieldKind }[] = [
+  { id: 'notes.agent_email', label: 'Remark: agent email (read from Gmail, a value typed in Excel is kept instead)', kind: 'text' }, { id: 'notes.bill_no', label: 'Remark: bill no. (typed in Excel, kept in the database)', kind: 'text' },
+  { id: 'notes.own_job', label: 'Own job Y/N (read from Gmail from FY 2026-27, a value typed in Excel is kept instead; dropdown Y/N, Y colours the SB Job No)', kind: 'text' },
+];
+/** Columns the owner can type into: remarks and the derived columns. Their note field is the part of the id after the dot. */
+export const is_typed = (id: string) => id.startsWith('notes.') || id.startsWith('derived.');
+export const typed_field = (id: string) => id.slice(id.indexOf('.') + 1);
 /** Every exportable field id (`bills.<col>` or a list field) with its label and kind. */
 export const CATALOG: { id: string; label: string; kind: FieldKind }[] = [
   ...new Map([...BILL_FIELDS, ...OWN_FIELDS].map(b => [b.col, b] as const)).values().map(b => ({ id: `bills.${b.col}`, label: b.label, kind: b.kind })),
-  ...IDENTITY_FIELDS, ...LIST_FIELDS, ...DERIVED_FIELDS,
+  ...IDENTITY_FIELDS, ...LIST_FIELDS, ...DERIVED_FIELDS, ...NOTE_FIELDS,
 ];

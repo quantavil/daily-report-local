@@ -1,10 +1,12 @@
 /** Read-only Gmail search for candidate PDF attachments. No message contents are logged. */
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { OWN_ADDRESS } from './rules';
 import type { BillKey } from './store/db';
 
-type Runner = (method: 'list' | 'get' | 'attachment', params: Record<string, unknown>) => Promise<any>;
-type Part = { filename?: string; mimeType?: string; body?: { attachmentId?: string; data?: string; size?: number }; parts?: Part[] };
+type Runner = (method: 'list' | 'get' | 'thread' | 'attachment', params: Record<string, unknown>) => Promise<any>;
+type Header = { name?: string; value?: string };
+type Part = { headers?: Header[]; filename?: string; mimeType?: string; body?: { attachmentId?: string; data?: string; size?: number }; parts?: Part[] };
 export class GmailError extends Error {}
 const MAX_PDF = 20 * 1024 * 1024;
 
@@ -12,7 +14,7 @@ export function gmail_runner(): Runner {
   const local = join(process.env.HOME ?? '', '.bun/bin/gws');
   const executable = Bun.which('gws') ?? (existsSync(local) ? local : 'gws');
   return async (method, params) => {
-    const commands = method === 'attachment' ? ['users', 'messages', 'attachments', 'get'] : ['users', 'messages', method];
+    const commands = method === 'attachment' ? ['users', 'messages', 'attachments', 'get'] : method === 'thread' ? ['users', 'threads', 'get'] : ['users', 'messages', method];
     const proc = (() => {
       try { return Bun.spawn([executable, 'gmail', ...commands, '--params', JSON.stringify({userId:'me', ...params})], {stdout:'pipe', stderr:'pipe'}); }
       catch { throw new GmailError('Gmail lookup failed; gws is not available'); }
@@ -51,4 +53,34 @@ export async function* gmail_gatepasses(bill: BillKey, run: Runner = gmail_runne
       pageToken = typeof list.nextPageToken === 'string' ? list.nextPageToken : undefined;
     } while (pageToken);
   }
+}
+
+/** What the mail around one bill shows: attachment file names of its threads, and the addresses the owner wrote to. Nothing is downloaded. */
+const ADDRESS = /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g;
+export interface BillMail { has_mail: boolean; filenames: string[]; sent_to: string[]; sent_cc: string[] }
+
+function* named_parts(part: Part | undefined): Generator<string> {
+  if (!part) return;
+  if (part.filename) yield part.filename;
+  for (const child of part.parts ?? []) yield* named_parts(child);
+}
+
+/** Threads that mention the SB number (up to four, from the day before the SB date): file names of every message, and the To addresses of messages the owner sent that carry an attachment. */
+export async function gmail_bill_mail(bill: BillKey, run: Runner = gmail_runner()): Promise<BillMail> {
+  const day = new Date(Date.parse(`${bill.sb_date}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10).replaceAll('-', '/');
+  const list = await run('list', {q:`"${bill.sb_no}" after:${day}`, maxResults:20});
+  const threads = [...new Set<string>((list.messages ?? []).flatMap((m: any) => typeof m.threadId === 'string' ? [m.threadId] : []))].slice(0, 4);
+  const out: BillMail = { has_mail: threads.length > 0, filenames: [], sent_to: [], sent_cc: [] };
+  for (const id of threads) {
+    const thread = await run('thread', {id, format:'full'});
+    for (const m of thread.messages ?? []) {
+      const files = [...named_parts(m.payload)], header = (name: string) => (m.payload?.headers ?? []).find((h: Header) => h.name?.toLowerCase() === name)?.value ?? '';
+      out.filenames.push(...files);
+      if (files.length && OWN_ADDRESS.test(header('from'))) {
+        out.sent_to.push(...(header('to').match(ADDRESS) ?? []));
+        out.sent_cc.push(...(header('cc').match(ADDRESS) ?? []));
+      }
+    }
+  }
+  return out;
 }

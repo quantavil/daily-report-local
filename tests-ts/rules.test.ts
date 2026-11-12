@@ -1,5 +1,21 @@
 import { describe, expect, test } from 'bun:test';
-import { bill_identity, is_cancelled, label_matches, parse_date, stuffing_of, value_token } from '../src/ts/rules';
+import { agent_address, bill_identity, job_tokens, own_job_of, is_cancelled, label_matches, parse_date, stuffing_of, value_token } from '../src/ts/rules';
+
+describe('Gmail evidence rules', () => {
+  test('job tokens ignore the VIDE prefix when counting and keep case-insensitive matches', () => {
+    expect(job_tokens(['CheckList-exp-2627-70.pdf', 'VIDE-EXP-2627-70.pdf', 'leo.pdf'])).toEqual(['EXP-2627-70']);
+    expect(own_job_of([], true, false)).toBe('');
+    expect(own_job_of([], false, true)).toBe('');
+  });
+  test('the agent address is the most frequent outside address; a tie keeps every tied address', () => {
+    expect(agent_address(['x@a.com', 'X@A.com', 'info@vishallogistics.in', 'noreply@icegate.gov.in'])).toBe('x@a.com');
+    expect(agent_address(['x@a.com', 'y@a.com'])).toBe('x@a.com, y@a.com');
+    expect(agent_address(['rohit@a.com', 'edi@a.com', 'Rohit@a.com', 'info@vishallogistics.in'])).toBe('rohit@a.com');
+    expect(agent_address([])).toBe('');
+    expect(agent_address(['me@vishallogistics.in'], ['Agent@a.com', 'agent@a.com', 'b@a.com'])).toBe('agent@a.com'); // To has no outside address: Cc is used
+    expect(agent_address(['x@a.com'], ['y@a.com'])).toBe('x@a.com');
+  });
+});
 
 describe('ICEGATE policy', () => {
   test('stuffing: every seal needs a letter for factory stuffing; no seal stays blank', () => {

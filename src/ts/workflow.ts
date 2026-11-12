@@ -4,18 +4,19 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { field_kind, type ExportMap } from './excel/export-map';
-import type { Sheet } from './excel/report';
+import { read_sheets } from './excel/read';
+import { write_report, type Sheet } from './excel/report';
 import { gatepass_identity, parse_gatepass, parse_sbcopy } from './gatepass/parse';
-import { GmailError } from './gmail';
+import { GmailError, type BillMail } from './gmail';
 import { month_end, NotReady, type EcopyRecord, type IcegateClient } from './icegate/client';
-import { BILL_FIELDS, type BillField } from './icegate/schemas';
-import { bill_identity, DERIVED_LCL, fy_of, parse_date, plausible_sb_date, stuffing_of } from './rules';
-import { apply_iec_names, clean, DataError, fill_bill, fill_containers, fill_invoices, gaps, get_bill, list_bills, stuffing_override, list_containers, lcl_key, list_invoices, set_iec_name, shared_containers, stamp, status_of, type Bill, type BillKey, type Db } from './store/db';
+import { BILL_FIELDS, is_typed, typed_field, type BillField } from './icegate/schemas';
+import { agent_address, bill_identity, DERIVED_LCL, excel_date, fy_of, job_tokens, MAIL_FROM, own_job_of, parse_date, plausible_sb_date, sb_number, stuffing_of } from './rules';
+import { apply_iec_names, clean, DataError, fill_bill, fill_containers, fill_invoices, fill_notes_from_mail, gaps, mail_checked, get_bill, list_bills, note_key, notes_of, set_notes, snapshot_notes, list_containers, lcl_key, list_invoices, set_iec_name, shared_containers, stamp, status_of, written_notes, type Bill, type BillKey, type BillRef, type Db } from './store/db';
 
 export type RowStatus = 'Success' | 'Partial' | 'Cancelled' | 'Manual' | 'Not found' | 'Error';
 export type GatepassResult = 'saved' | 'icegate' | 'gmail' | 'unavailable' | 'error';
 export interface Outcome { status: RowStatus; detail: string; gatepass?: GatepassResult }
-export interface SyncOptions { workers: number; excel_only: boolean; from: string; to?: string; force?: boolean; gatepass_dir: string; gmail?: (bill: BillKey) => AsyncGenerator<Uint8Array>; on_progress?: (done: number, total: number, bill: BillKey, outcome: Outcome) => void }
+export interface SyncOptions { workers: number; excel_only: boolean; from: string; to?: string; force?: boolean; gatepass_dir: string; gmail?: (bill: BillKey) => AsyncGenerator<Uint8Array>; mail?: (bill: BillKey) => Promise<BillMail>; on_progress?: (done: number, total: number, bill: BillKey, outcome: Outcome) => void }
 export interface SyncResult { results: [BillKey, Outcome][]; warnings: string[] }
 
 /** Counts describe this run; previously saved files have unknown original provenance. */
@@ -205,18 +206,68 @@ export async function sync(db: Db, client: IcegateClient, o: SyncOptions): Promi
     results.push([k, outcome]);
     o.on_progress?.(results.length, todo.length, k, outcome);
   });
+  if (!o.excel_only && o.mail) warnings.push(...await read_mail(db, o.mail, o.workers));
   return { results: results.sort((a, b) => a[0].sb_date.localeCompare(b[0].sb_date) || a[0].sb_no.localeCompare(b[0].sb_no)), warnings };
+}
+
+/** From FY 2026-27, once per bill with a LEO date that is not cancelled: own job and agent address from Gmail, written only where the owner has typed nothing. A Gmail failure stops this step with one warning; the bills stay unread for the next run. */
+async function read_mail(db: Db, mail: (bill: BillKey) => Promise<BillMail>, workers: number): Promise<string[]> {
+  const done = mail_checked(db), todo = list_bills(db).filter(b => b.sb_date >= MAIL_FROM && b.leo_date && status_of(db, b) !== 'Cancelled' && !done.has(`${fy_of(b.sb_date)}|${b.sb_no}`)), warnings: string[] = [];
+  let stopped = false;
+  await pool(todo, Math.min(workers, 4), async b => {
+    if (stopped) return;
+    try {
+      const found = await mail(key_of(b));
+      fill_notes_from_mail(db, b, { own_job: own_job_of(job_tokens(found.filenames), found.has_mail, true), agent_email: agent_address(found.sent_to, found.sent_cc) });
+    } catch (error) { if (!stopped) warnings.push(`Gmail mail evidence stopped: ${message(error)}`); stopped = true; }
+  });
+  return warnings;
+}
+
+/** The typed-in columns (remarks, and the derived columns) exist only in the workbook, so before it is rewritten they are read back into the database. Only a cell that differs from what the workbook showed when this program last wrote it counts as typed: a cleared cell clears the note (a derived column then shows its computed value again), while a workbook that is merely out of date changes nothing. A derived cell the program never wrote down before cannot be told from a typed one and is left alone once. A bill is found by its SB number and date; a sheet without a column leaves that note alone. A workbook that cannot be read throws, so it is never overwritten. Returns how many notes changed. */
+export async function keep_notes(db: Db, map: ExportMap, path: string): Promise<number> {
+  const fields = Object.entries(map).filter(([, id]) => is_typed(id));
+  const header_of = (id: string) => Object.keys(map).find(h => map[h] === id);
+  const sheets = fields.length ? await read_sheets(path) : null;
+  if (!sheets) return 0;
+  const no = header_of('bills.sb_no'), date = header_of('bills.sb_date'), written = written_notes(db);
+  if (!no || !date) throw new Error('export-map.json needs the Shipping Bill No and Shipping Bill Date columns so typed values can be matched to their bills');
+  let changed = 0;
+  for (const sheet of sheets) {
+    if (!sheet.headers.includes(no) || !sheet.headers.includes(date)) continue;
+    const present = fields.filter(([header]) => sheet.headers.includes(header));
+    for (const row of sheet.rows) {
+      let k: BillRef;
+      try { k = { sb_no: sb_number(row[no]!), sb_date: excel_date(row[date]!) }; } catch { continue; }
+      const typed = present.filter(([header, id]) => {
+        const was = written.get(note_key(k, typed_field(id)));
+        return (was !== undefined || id.startsWith('notes.')) && (row[header] ?? '').trim() !== (was ?? '');
+      });
+      if (typed.length) changed += set_notes(db, k, Object.fromEntries(typed.map(([header, id]) => [typed_field(id), row[header] ?? ''])));
+    }
+  }
+  return changed;
+}
+
+/** Writes the workbook and remembers what its typed-in columns show (see `keep_notes`). */
+export async function publish_report(db: Db, path: string, sheets: Sheet[], map: ExportMap): Promise<void> {
+  await write_report(path, sheets);
+  const header_of = (id: string) => Object.keys(map).find(h => map[h] === id), no = header_of('bills.sb_no'), date = header_of('bills.sb_date');
+  const fields = Object.entries(map).filter(([, id]) => is_typed(id));
+  snapshot_notes(db, no && date ? sheets.flatMap(sheet => sheet.rows.flatMap(row => fields.map(([header, id]) => [{ sb_no: row[no]?.value ?? '', sb_date: row[date]?.value ?? '' }, typed_field(id), (row[header]?.value ?? '').trim()] as [BillRef, string, string]))) : []);
 }
 
 /** The export values for one bill, keyed by report header. Multi-row fields are newline-joined, blanks kept in place. */
 export function cells_for(db: Db, k: BillKey, map: ExportMap, lcl: Set<string>): Sheet['rows'][number] {
   const bill = get_bill(db, k), cells: Sheet['rows'][number] = {};
-  const lists: Record<string, Record<string, string>[]> = { invoices: list_invoices(db, k), containers: list_containers(db, k) };
+  const lists: Record<string, Record<string, string>[]> = { invoices: list_invoices(db, k), containers: list_containers(db, k) }, notes = notes_of(db, k);
   for (const [header, id] of Object.entries(map)) {
     const [table, col] = id.split('.') as [string, string];
-    const value = id === 'derived.status' ? status_of(db, k)
-      : id === 'derived.stuffing' ? stuffing_override(db, k) || stuffing_of(lists.containers!.map(c => c.seal ?? ''))
+    const value = is_typed(id) && notes[col] !== undefined ? notes[col]! // typed in the workbook: beats what would be computed
+      : id === 'derived.status' ? status_of(db, k)
+      : id === 'derived.stuffing' ? stuffing_of(lists.containers!.map(c => c.seal ?? ''))
       : id === 'derived.type_shipment' ? (lists.containers!.some(c => lcl.has(lcl_key(c))) ? DERIVED_LCL : '')
+      : table === 'notes' ? ''
       : table === 'bills' ? bill?.[col] ?? '' : (lists[table] ?? []).map(r => r[col] ?? '').join('\n');
     if (value.trim()) cells[header] = { value, date: field_kind(id) === 'date' };
   }
@@ -227,6 +278,6 @@ export function cells_for(db: Db, k: BillKey, map: ExportMap, lcl: Set<string>):
 export function report_sheets(db: Db, map: ExportMap): Sheet[] {
   const lcl = shared_containers(db), years = new Map<string, Bill[]>();
   for (const b of list_bills(db).sort((a, b) => a.sb_date.localeCompare(b.sb_date) || a.sb_no.localeCompare(b.sb_no))) years.set(fy_of(b.sb_date), [...(years.get(fy_of(b.sb_date)) ?? []), b]);
-  const header_of = (id: string) => Object.keys(map).find(h => map[h] === id), flag = header_of('derived.own_job'), target = header_of('bills.sb_job_no');
-  return [...years].sort(([a], [b]) => a.localeCompare(b)).map(([fy, bills]) => ({ name: `FY ${fy}`, headers: Object.keys(map), derived: Object.keys(map).filter(h => map[h]!.startsWith('derived.')), ...(flag && target ? { highlight: { flag, target } } : {}), rows: bills.map(b => cells_for(db, b, map, lcl)) }));
+  const header_of = (id: string) => Object.keys(map).find(h => map[h] === id), flag = header_of('notes.own_job'), target = header_of('bills.sb_job_no');
+  return [...years].sort(([a], [b]) => a.localeCompare(b)).map(([fy, bills]) => ({ name: `FY ${fy}`, headers: Object.keys(map), derived: Object.keys(map).filter(h => is_typed(map[h]!)), ...(flag && target ? { highlight: { flag, target } } : {}), rows: bills.map(b => cells_for(db, b, map, lcl)) }));
 }

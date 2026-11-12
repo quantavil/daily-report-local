@@ -20,7 +20,7 @@
 
 Creates bills from ICEGATE into SQLite (`data/report.db`) with the `icegate` CLI, using
 Gmail as a read-only gatepass fallback, then regenerates `report.xlsx` from the database. SQLite is the product, Excel the residue:
-nobody fills anything by hand. This is the maintenance contract; setup and usage live in `README.md`.
+the only hand-typed cells are the three `Remark(...)` columns and any derived column typed over, which are read back into the database before every rewrite. This is the maintenance contract; setup and usage live in `README.md`.
 
 ## Toolchain
 - Bun only: `bun install`, `bun run sync ...`, `bun run dev`, `bun test`, `bun check`.
@@ -49,9 +49,10 @@ nobody fills anything by hand. This is the maintenance contract; setup and usage
 | `icegate/client.ts` | Spawns `icegate ... --json`; the only code that talks to ICEGATE; never sees credentials |
 | `icegate/schemas.ts` | valibot shapes of the JSON and the field catalog (database columns, export picker) |
 | `store/db.ts` | SQLite schema, merge and current-status refresh, IEC-name map, gaps, status; no ICEGATE or Excel code |
-| `gmail.ts` | Read-only Gmail search and PDF attachment retrieval through `gws` |
+| `gmail.ts` | Read-only Gmail search through `gws`: gatepass PDF retrieval, and per-bill evidence (attachment file names, To addresses of the owner's own mail with attachments); nothing else is downloaded |
 | `gatepass/parse.ts` | Native layout via mupdf and rule-driven parsing of the SB35 gatepass and the SB e-copy; no network, no Excel |
 | `excel/export-map.ts` | Loads and validates `export-map.json` |
+| `excel/read.ts` | Reads cell text back from a workbook (ours or one saved by Excel/LibreOffice); no database, no rules |
 | `excel/report.ts` | Writes `report.xlsx` from scratch on fflate (atomic rename), including the `highlight` Excel rule (green target cell where the flag column is Y) and the Y/N dropdown; no business rules |
 | `server.ts` | `bun run dev` localhost dashboard (`src/ui/index.html`): spawns the CLI, reads `report.db` read-only, saves `export-map.json`; imports no fetch or workflow code |
 
@@ -96,8 +97,10 @@ nobody fills anything by hand. This is the maintenance contract; setup and usage
 - Statuses: `Success`, `Partial`, `Cancelled`, `Manual` (closed by hand with `mark-manual`, the user's decision that a field cannot be obtained; never queried again unless `--force`), `Not found` (not known to the portal),
   `Error` (runtime or extraction failure, run output only).
 - Export is last and complete: every bill in the database is written, one `FY yyyy-yy` sheet
-  per year oldest first, rows by SB date. `Type of Stuffing (derived)` comes from `rules.ts` `stuffing_of` (the only rule: letters in every seal mean factory stuffing, the owner's updated workbook agrees for 98% of those bills; numeric, mixed or missing seals stay blank because a numeric seal is mostly ICD but can be Factory when the seal was broken at the ICD, and no field in our data tells them apart; the owner's `stuffing-set` override (table `stuffing_overrides`, kept across rebuilds) wins over the rule, and numeric-seal bills are filled that way; computed, never stored). `Type Shipment (derived)` is `LCL` only when a
-  container is shared by bills of different non-empty exporters dated within `LCL_WINDOW_DAYS`; it is computed, never stored. Derived columns get an amber header (users and agents may overwrite them).
+  per year oldest first, rows by SB date. `Type of Stuffing (derived)` comes from `rules.ts` `stuffing_of` (the only rule: letters in every seal mean factory stuffing, the owner's updated workbook agrees for 98% of those bills; numeric, mixed or missing seals stay blank because a numeric seal is mostly ICD but can be Factory when the seal was broken at the ICD, and no field in our data tells them apart; a value typed by the owner (the `stuffing-set` command, or typed over the cell in Excel) is the `stuffing` note, wins over the rule, and numeric-seal bills are filled that way; otherwise computed, never stored). `Type Shipment (derived)` is `LCL` only when a
+  container is shared by bills of different non-empty exporters dated within `LCL_WINDOW_DAYS`; it is computed, never stored unless typed over. Derived and hand-typed columns get an amber header (users and agents may overwrite them and the typed value lasts; clearing the cell brings the computed value back). A typed `Status` changes only the report, never which bills are fetched.
+- Typed-in columns (`notes.*` ids: `Remark(Agent email)`, `Remark(Bill no.)`, `Remark(Own job Y/N)`; and the `derived.*` ids `Status`, `Type of Stuffing (derived)`, `Type Shipment (derived)`) live in table `notes`, kept across rebuilds; a derived note wins over the computed value. Before each report write `workflow.ts` `keep_notes` reads the workbook back (`excel/read.ts`) and stores every cell that differs from `notes_written`, every typed-in column as the workbook showed it when this program last wrote it (`publish_report`, blanks included); a cleared cell clears the note, and an out-of-date workbook changes nothing because its cells equal what was written. A derived cell with no snapshot (workbook from before this existed) is skipped once, since it cannot be told from a typed one. Bills are matched by SB number and SB date, so the map needs both columns. An unreadable workbook stops the run and is not overwritten.
+- Gmail own-job and agent email (`workflow.ts` `read_mail`, rules in `rules.ts` `job_tokens`, `own_job_of`, `agent_address`, `MAIL_FROM`): after the ICEGATE fetch, once per bill dated from 2026-04-01 with a LEO date that is not cancelled (table `mail_checked`). The attachment file name of the owner's mail carries the checklist token `EXP-yyyy-n` / `VIDE-EXP-yyyy-n`: one token is `Y`, several write `CHECK: …` into the own-job note for the owner to settle, none with mail present is `N`. The agent email is the non-owner, non-ICEGATE To address that appears most often; tied addresses are all written, comma-separated, for the owner to trim; when To holds no outside address Cc is used; none stays blank. Results are inserted into `notes` only where no note exists (typed values win; a cleared cell is not refilled). Never download or read the checklist PDFs; there is no agent-code column. A Gmail failure stops the step with one warning and leaves bills unread. Measured on 50 FY 2026-27 bills against the owner's notes: own job agreed on 46, 3 listed several tokens, none contradicted; agent email was found for 17 and always matched the agent code.
 - `--check` is read-only (no network, no report write). `-n` does everything except write the
   report. `--excel` only rewrites the report from the database (no ICEGATE calls; not combinable with `--from`, `--to` or `--force`). `--from` sets the first discovery month. A
   gatepass the portal is still preparing leaves its fields blank for a later run.
@@ -115,8 +118,8 @@ nobody fills anything by hand. This is the maintenance contract; setup and usage
 
 ## Report safety
 
-- `report.xlsx` is generated, never patched: a temp file is renamed over it atomically.
-  Nothing reads it back, so hand edits are lost by design.
+- `report.xlsx` is generated, never patched: a temp file is renamed over it atomically, and the file it replaces is first copied to `report.xlsx.bak` (git-ignored), the one backup kept.
+  Only the typed-in columns (`Remark` and derived, see above) are read back (`keep_notes`); every other hand edit is lost by design.
 - Schema changes bump `SCHEMA_VERSION` in `store/db.ts`; fetched bill tables are rebuilt and
   refetched, the IEC-name map is kept, and the old file is copied to `report.db.bak-v<N>` first.
 - A portal date that is not a date is a `DataError` on that bill (nothing stored); only `DataError` is skipped during discovery, any other failure stops the run.
