@@ -10,6 +10,11 @@ type Part = { headers?: Header[]; filename?: string; mimeType?: string; body?: {
 export class GmailError extends Error {}
 const MAX_PDF = 20 * 1024 * 1024;
 
+/** Fast pre-flight check that gws is available and authorized. Throws GmailError if unauthorized or unavailable. */
+export async function verify_gmail_auth(run: Runner = gmail_runner()): Promise<void> {
+  await run('list', { maxResults: 1 });
+}
+
 export function gmail_runner(): Runner {
   const local = join(process.env.HOME ?? '', '.bun/bin/gws');
   const executable = Bun.which('gws') ?? (existsSync(local) ? local : 'gws');

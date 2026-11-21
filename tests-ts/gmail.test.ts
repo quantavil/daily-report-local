@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { gmail_bill_mail, gmail_gatepasses } from '../src/ts/gmail';
+import { gmail_bill_mail, gmail_gatepasses, verify_gmail_auth, GmailError } from '../src/ts/gmail';
+import { main } from '../src/ts/cli';
 
 describe('Gmail gatepass search', () => {
   test('searches the financial year then later mail, walks MIME parts and fetches attachments', async () => {
@@ -32,5 +33,30 @@ describe('Gmail bill evidence', () => {
     const out = await gmail_bill_mail({ sb_no: '7546404', sb_date: '2026-10-07', port_code: 'INMBD6' }, run as any);
     expect(calls).toEqual(['list:"7546404" after:2026/10/06', 'thread:t1']);
     expect(out).toEqual({ has_mail: true, filenames: ['CheckList-EXP-2627-5.pdf', 'reply.pdf'], sent_to: ['a@x.com', 'icegate@gov.in'], sent_cc: [] });
+  });
+
+  test('verify_gmail_auth probes messages list with limit 1', async () => {
+    const calls: { method: string; params: any }[] = [];
+    const run = async (method: string, params: any) => { calls.push({ method, params }); return { messages: [] }; };
+    await verify_gmail_auth(run as any);
+    expect(calls).toEqual([{ method: 'list', params: { maxResults: 1 } }]);
+  });
+
+  test('verify_gmail_auth re-throws on runner error', async () => {
+    const run = async () => { throw new GmailError('Gmail lookup failed; check Gmail authorization'); };
+    expect(verify_gmail_auth(run as any)).rejects.toThrow('check Gmail authorization');
+  });
+
+  test('CLI main halts before sync if Gmail auth check fails', async () => {
+    const errs: string[] = [];
+    const origErr = console.error;
+    console.error = (msg: string) => errs.push(msg);
+    try {
+      const exitCode = await main(['-n'], async () => { throw new GmailError('expired'); });
+      expect(exitCode).toBe(1);
+      expect(errs.some(e => e.includes("Gmail authorization expired or missing. Please run 'gws auth login'"))).toBe(true);
+    } finally {
+      console.error = origErr;
+    }
   });
 });

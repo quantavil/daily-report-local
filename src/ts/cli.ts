@@ -5,7 +5,7 @@ import { parseArgs } from 'node:util';
 import pkg from '../../package.json';
 import { load_map } from './excel/export-map';
 import { command_client } from './icegate/client';
-import { gmail_bill_mail, gmail_gatepasses } from './gmail';
+import { gmail_bill_mail, gmail_gatepasses, verify_gmail_auth } from './gmail';
 import { CATALOG } from './icegate/schemas';
 import { parse_date } from './rules';
 import { gaps, list_bills, mark_manual, missing_iecs, open_db, set_iec_name, set_notes, status_of, type BillKey, type Db } from './store/db';
@@ -76,7 +76,7 @@ function default_from(db: Db): string {
   return d.toISOString().slice(0, 10) < FIRST_MONTH ? FIRST_MONTH : d.toISOString().slice(0, 10);
 }
 
-export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> {
+export async function main(argv: string[] = Bun.argv.slice(2), checkAuth: () => Promise<void> = verify_gmail_auth): Promise<number> {
   const started = performance.now();
   try {
     const { values: o, positionals } = parseArgs({ args: argv, strict: true, allowPositionals: true, options: {
@@ -137,6 +137,10 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
       if (!existsSync(dbPath)) { console.log('No database yet.'); return 0; }
       showCheck(open_db(dbPath, true));
       return 0;
+    }
+    if (!o.excel) {
+      try { await checkAuth(); }
+      catch { throw new Error("Gmail authorization expired or missing. Please run 'gws auth login' before syncing."); }
     }
     const map = await load_map(join(ROOT, 'export-map.json'));
     const db = open_db(dbPath);
